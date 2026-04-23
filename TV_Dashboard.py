@@ -14,71 +14,112 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ── Auto-refresh every 5 minutes ──────────────────────────────────────────────
+# ── Auto-refresh every 30 minutes ─────────────────────────────────────────────
+st.markdown('<meta http-equiv="refresh" content="1800">', unsafe_allow_html=True)
+
+# ── Loading screen + live clock via JavaScript ────────────────────────────────
 st.markdown("""
-    <meta http-equiv="refresh" content="1800">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<style>
+#loading-screen {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: #0a0a14;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 99999;
+    transition: opacity 1s ease;
+}
+#loading-screen.hidden { opacity: 0; pointer-events: none; }
+#loading-clock {
+    font-family: 'Bebas Neue', cursive;
+    font-size: 9rem; color: #e92076;
+    letter-spacing: 6px; line-height: 1; margin-top: 2rem;
+}
+#loading-date {
+    font-size: 1rem; color: rgba(255,255,255,0.4);
+    letter-spacing: 4px; text-transform: uppercase; margin-top: 0.5rem;
+}
+#loading-bar { width: 200px; height: 2px; background: rgba(233,32,118,0.2); margin-top: 3rem; border-radius: 2px; overflow: hidden; }
+#loading-bar-fill { height: 100%; width: 0%; background: #e92076; animation: loadbar 3s ease forwards; }
+@keyframes loadbar { to { width: 100%; } }
+
+/* Live clock in header */
+#live-clock { font-family: 'Bebas Neue', cursive; font-size: 2.8rem; color: #e92076; letter-spacing: 2px; }
+#live-date { font-size: 0.85rem; color: rgba(255,255,255,0.4); letter-spacing: 2px; text-transform: uppercase; text-align: right; }
+</style>
+
+<div id="loading-screen">
+    <img src="https://www.lincks.nl/uploads/lincks_logo_fc-wit_def.png" style="height:80px;" />
+    <div id="loading-clock">--:--</div>
+    <div id="loading-date">laden...</div>
+    <div id="loading-bar"><div id="loading-bar-fill"></div></div>
+</div>
+
+<script>
+const NL_DAYS = ['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
+const NL_MONTHS = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+
+function getNLTime() {
+    return new Date(new Date().toLocaleString("en-US", {timeZone: "Europe/Amsterdam"}));
+}
+
+function formatClock(d) {
+    return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+function formatDate(d) {
+    return NL_DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + NL_MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+}
+
+function tick() {
+    const now = getNLTime();
+    const clock = formatClock(now);
+    const date = formatDate(now);
+
+    // Update loading screen
+    const lc = document.getElementById('loading-clock');
+    const ld = document.getElementById('loading-date');
+    if (lc) lc.textContent = clock;
+    if (ld) ld.textContent = date;
+
+    // Update header clock
+    const hc = document.getElementById('live-clock');
+    const hd = document.getElementById('live-date');
+    if (hc) hc.textContent = clock;
+    if (hd) hd.textContent = date.toUpperCase();
+}
+
+tick();
+setInterval(tick, 1000);
+
+// Hide loading screen when Streamlit content is ready
+function hideLoader() {
+    const blocks = document.querySelectorAll('[data-testid="stVerticalBlock"]');
+    if (blocks.length > 0) {
+        const el = document.getElementById('loading-screen');
+        if (el) { el.classList.add('hidden'); setTimeout(() => { if(el) el.remove(); }, 1000); }
+    } else {
+        setTimeout(hideLoader, 400);
+    }
+}
+setTimeout(hideLoader, 2500);
+</script>
 """, unsafe_allow_html=True)
 
 # ── Styling ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;600;700;900&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        background-color: #0a0a14;
-    }
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #0a0a14; }
     .stApp { background-color: #0a0a14; }
     [data-testid="stAppViewContainer"] { background-color: #0a0a14; }
     .block-container { padding: 1.5rem 2rem !important; }
-    footer { visibility: hidden; }
-    #MainMenu { visibility: hidden; }
-    header { visibility: hidden; }
+    footer { visibility: hidden; } #MainMenu { visibility: hidden; } header { visibility: hidden; }
     [data-testid="collapsedControl"] { display: none; }
-
-    .tv-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 1.5rem;
-        padding-bottom: 1rem;
-        border-bottom: 2px solid rgba(233,32,118,0.3);
-    }
-    .tv-title {
-        font-family: 'Bebas Neue', sans-serif;
-        font-size: 2.8rem;
-        color: white;
-        letter-spacing: 3px;
-        margin: 0;
-        line-height: 1;
-    }
-    .tv-subtitle {
-        font-size: 0.85rem;
-        color: rgba(255,255,255,0.4);
-        margin: 0;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-    }
-    .tv-time {
-        font-family: 'Bebas Neue', sans-serif;
-        font-size: 2rem;
-        color: #e92076;
-        letter-spacing: 2px;
-    }
-    .section-label {
-        font-size: 0.7rem;
-        font-weight: 700;
-        color: rgba(255,255,255,0.35);
-        text-transform: uppercase;
-        letter-spacing: 3px;
-        margin-bottom: 0.8rem;
-    }
-    .stSelectbox > div > div {
-        background-color: #1a0a2e !important;
-        border: 1px solid rgba(233,32,118,0.3) !important;
-        color: white !important;
-        font-size: 0.85rem !important;
-    }
+    .tv-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid rgba(233,32,118,0.3); }
+    .tv-title { font-family: 'Bebas Neue', sans-serif; font-size: 2.8rem; color: white; letter-spacing: 3px; margin: 0; line-height: 1; }
+    .tv-subtitle { font-size: 0.85rem; color: rgba(255,255,255,0.4); margin: 0; letter-spacing: 2px; text-transform: uppercase; }
+    .section-label { font-size: 0.7rem; font-weight: 700; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 3px; margin-bottom: 0.8rem; }
+    .stSelectbox > div > div { background-color: #1a0a2e !important; border: 1px solid rgba(233,32,118,0.3) !important; color: white !important; }
     .stSelectbox label { color: rgba(255,255,255,0.4) !important; font-size: 0.75rem !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -89,7 +130,6 @@ CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 TOKEN_URL     = "https://id-s3.carerix.io/auth/realms/lincks/protocol/openid-connect/token"
 API_URL       = "https://api.carerix.io/graphql/v1/graphql"
 DATA_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-NL_OFFSET     = timedelta(hours=2)
 
 CONSULTANT_TARGETS = {
     "Mireille Prooi":      0,
@@ -116,9 +156,6 @@ LINCKS_PERSONEEL_MARGINS = {
     "Still Intern Transport":           0.3885738,
     "Beveco Gebouwautomatisering B.V.": 1.0,
 }
-
-def nl_now():
-    return datetime.utcnow() + NL_OFFSET
 
 def get_token():
     r = requests.post(TOKEN_URL, data={"grant_type": "client_credentials",
@@ -181,13 +218,10 @@ def load_parquet_data():
 
 def load_data():
     users, placements_raw, invoices_raw = load_parquet_data()
-
     if "tv_incremental_done" not in st.session_state:
         st.session_state["tv_incremental_done"] = False
-
-    last_sync  = get_last_sync()
-    today      = nl_now().strftime("%Y-%m-%d")
-
+    last_sync = get_last_sync()
+    today = (datetime.utcnow() + timedelta(hours=2)).strftime("%Y-%m-%d")
     if last_sync < today and not st.session_state["tv_incremental_done"] and CLIENT_SECRET:
         try:
             new_inv = fetch_new_invoices(last_sync)
@@ -206,8 +240,7 @@ def load_data():
                         "original_date": original.get("valueDate") or original.get("date"),
                         "total":         float(inv.get("total") or 0),
                         "status":        inv.get("statusDisplay"),
-                        "company":       company,
-                        "agency":        agency,
+                        "company":       company, "agency": agency,
                         "job_id":        str(job.get("_id", "")) if job else "",
                     })
                 new_df = pd.DataFrame(rows)
@@ -218,7 +251,6 @@ def load_data():
             print(f"[TV] Fetch failed: {e}")
     elif st.session_state.get("tv_incremental_done") and "tv_merged_invoices" in st.session_state:
         invoices_raw = st.session_state["tv_merged_invoices"]
-
     return users, placements_raw, invoices_raw
 
 def build_df(invoices_raw, placements_raw, users):
@@ -227,13 +259,11 @@ def build_df(invoices_raw, placements_raw, users):
     for _, inv in invoices_raw.iterrows():
         amount = float(inv.get("total") or 0)
         if amount == 0: continue
-        status = str(inv.get("status") or "")
-        if status != "Verzonden": continue
-
+        if str(inv.get("status") or "") != "Verzonden": continue
         vd   = str(inv.get("value_date") or "")[:10]
         d    = str(inv.get("date") or "")[:10]
         orig = str(inv.get("original_date") or "")[:10]
-        if amount < 0 and orig and orig not in ("None", "nan", ""):
+        if amount < 0 and orig and orig not in ("None","nan",""):
             date_str = orig
         else:
             date_str = max(vd, d) if vd and d else (vd or d)
@@ -241,12 +271,10 @@ def build_df(invoices_raw, placements_raw, users):
         if not date_str: continue
         try: date = pd.to_datetime(date_str)
         except: continue
-
         company = str(inv.get("company") or "Unknown")
         agency  = str(inv.get("agency") or "Unknown")
         job_id  = str(inv.get("job_id") or "")
         adjusted = amount * LINCKS_PERSONEEL_MARGINS.get(company, 1.0) if agency == "Lincks Personeel B.V." else amount
-
         consultants = []
         if job_id and job_id in job_map:
             p = job_map[job_id]
@@ -254,7 +282,6 @@ def build_df(invoices_raw, placements_raw, users):
                                    if k in p.index and str(p[k]) not in ("","nan","None")]))
             consultants = [users.get(uid, f"User {uid}") for uid in fase_users]
         if not consultants: consultants = ["Mireille Prooi"]
-
         rev_per = adjusted / len(consultants)
         for c in consultants:
             rows.append({"consultant": c, "amount": adjusted, "revenue": rev_per,
@@ -275,8 +302,7 @@ if not data_loaded or df.empty:
     st.warning("Geen data beschikbaar.")
     st.stop()
 
-# ── Header ────────────────────────────────────────────────────────────────────
-now = nl_now()
+# ── Header with live JS clock ─────────────────────────────────────────────────
 logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lincks_logo_fc-wit_def.png")
 logo_html = ""
 if os.path.exists(logo_path):
@@ -291,74 +317,48 @@ st.markdown(f"""
         <p class="tv-subtitle" style="margin-top:4px;">Performance Dashboard</p>
     </div>
     <div style="text-align:right;">
-        <div class="tv-time">{now.strftime("%H:%M")}</div>
-        <div class="tv-subtitle">{now.strftime("%A %d %B %Y")}</div>
+        <div id="live-clock" style="font-family:'Bebas Neue',sans-serif;font-size:2.8rem;color:#e92076;letter-spacing:2px;">--:--</div>
+        <div id="live-date" style="font-size:0.85rem;color:rgba(255,255,255,0.4);letter-spacing:2px;text-transform:uppercase;">--</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ── Month selector ────────────────────────────────────────────────────────────
 all_months = sorted(df["month"].unique().tolist(), reverse=True)
-current_month = now.strftime("%Y-%m")
-default_month = current_month if current_month in all_months else all_months[0]
+now_month  = (datetime.utcnow() + timedelta(hours=2)).strftime("%Y-%m")
+default_month = now_month if now_month in all_months else all_months[0]
 
 col_sel, _ = st.columns([1, 4])
 with col_sel:
-    selected_month = st.selectbox("📆 Maand", all_months,
-                                   index=all_months.index(default_month))
+    selected_month = st.selectbox("📆 Maand", all_months, index=all_months.index(default_month))
 
-filtered = df[df["month"] == selected_month]
-inv_filtered = filtered.drop_duplicates(subset=["consultant", "amount", "date"])
-
-# ── KPIs ──────────────────────────────────────────────────────────────────────
+filtered  = df[df["month"] == selected_month]
 total_rev = filtered.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
 pct_company = min(total_rev / COMPANY_TARGET * 100, 100)
-remaining = max(COMPANY_TARGET - total_rev, 0)
+remaining   = max(COMPANY_TARGET - total_rev, 0)
 
-# ── Layout: Donut left, Bar right ─────────────────────────────────────────────
+# ── Layout ────────────────────────────────────────────────────────────────────
 col_donut, col_bar = st.columns([1, 2])
 
 with col_donut:
     st.markdown('<div class="section-label">Maandtarget Bedrijf</div>', unsafe_allow_html=True)
-
     fig_donut = go.Figure(go.Pie(
-        values=[total_rev, remaining],
-        labels=["Behaald", "Resterend"],
-        hole=0.75,
-        marker_colors=["#e92076", "rgba(255,255,255,0.06)"],
-        textinfo="none",
-        hovertemplate="%{label}: €%{value:,.0f}<extra></extra>",
-        sort=False,
+        values=[total_rev, remaining], labels=["Behaald","Resterend"],
+        hole=0.75, marker_colors=["#e92076","rgba(255,255,255,0.06)"],
+        textinfo="none", hovertemplate="%{label}: €%{value:,.0f}<extra></extra>", sort=False,
     ))
-    fig_donut.add_annotation(
-        text=f"<b>{pct_company:.0f}%</b>",
-        x=0.5, y=0.60,
-        font=dict(size=64, color="#e92076", family="Bebas Neue"),
-        showarrow=False
-    )
-    fig_donut.add_annotation(
-        text=f"€{total_rev:,.0f}",
-        x=0.5, y=0.42,
-        font=dict(size=22, color="rgba(255,255,255,0.8)"),
-        showarrow=False
-    )
-    fig_donut.add_annotation(
-        text=f"van €{COMPANY_TARGET:,.0f}",
-        x=0.5, y=0.28,
-        font=dict(size=14, color="rgba(255,255,255,0.4)"),
-        showarrow=False
-    )
-    fig_donut.update_layout(
-        plot_bgcolor="#0a0a14", paper_bgcolor="#0a0a14",
-        showlegend=False,
-        margin=dict(l=20, r=20, t=20, b=20),
-        height=420,
-    )
+    fig_donut.add_annotation(text=f"<b>{pct_company:.0f}%</b>", x=0.5, y=0.60,
+        font=dict(size=64, color="#e92076", family="Bebas Neue"), showarrow=False)
+    fig_donut.add_annotation(text=f"€{total_rev:,.0f}", x=0.5, y=0.42,
+        font=dict(size=22, color="rgba(255,255,255,0.8)"), showarrow=False)
+    fig_donut.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}", x=0.5, y=0.28,
+        font=dict(size=14, color="rgba(255,255,255,0.4)"), showarrow=False)
+    fig_donut.update_layout(plot_bgcolor="#0a0a14", paper_bgcolor="#0a0a14",
+        showlegend=False, margin=dict(l=20,r=20,t=20,b=20), height=420)
     st.plotly_chart(fig_donut, use_container_width=True)
 
 with col_bar:
     st.markdown('<div class="section-label">Omzet per Recruiter</div>', unsafe_allow_html=True)
-
     rev_con = (filtered[~filtered["consultant"].isin(["Mireille Prooi"])]
                .groupby("consultant")["revenue"].sum().reset_index())
 
@@ -378,8 +378,7 @@ with col_bar:
 
     fig_bar = go.Figure()
     fig_bar.add_trace(go.Bar(
-        x=rev_con["revenue"], y=rev_con["consultant"],
-        orientation="h", name="Behaald",
+        x=rev_con["revenue"], y=rev_con["consultant"], orientation="h", name="Behaald",
         marker_color=rev_con["color"], marker_line_width=0,
         text=rev_con.apply(lambda r: f"€{r['revenue']:,.0f}  ({r['pct']:.0f}%)", axis=1),
         textposition="inside", insidetextanchor="middle",
@@ -387,30 +386,26 @@ with col_bar:
         hovertemplate="<b>%{y}</b><br>€%{x:,.0f}<extra></extra>",
     ))
     fig_bar.add_trace(go.Bar(
-        x=rev_con["resterend"], y=rev_con["consultant"],
-        orientation="h", name="Resterend",
+        x=rev_con["resterend"], y=rev_con["consultant"], orientation="h", name="Resterend",
         marker_color="rgba(255,255,255,0.05)",
         marker_line_color="rgba(255,255,255,0.1)", marker_line_width=1,
         hovertemplate="<b>%{y}</b><br>Nog: €%{x:,.0f}<extra></extra>",
     ))
     fig_bar.update_layout(
-        barmode="stack",
-        plot_bgcolor="#0a0a14", paper_bgcolor="#0a0a14",
+        barmode="stack", plot_bgcolor="#0a0a14", paper_bgcolor="#0a0a14",
         font_color="rgba(255,255,255,0.6)",
-        xaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickprefix="€",
-                   tickfont=dict(size=12)),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickprefix="€", tickfont=dict(size=12)),
         yaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(size=15)),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font=dict(color="white", size=12)),
-        margin=dict(l=0, r=20, t=40, b=0),
-        height=420,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(color="white", size=12)),
+        margin=dict(l=0,r=20,t=40,b=0), height=420,
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div style="text-align:center; margin-top:1rem; color:rgba(255,255,255,0.15);
-     font-size:0.7rem; letter-spacing:2px; text-transform:uppercase;">
-    Automatisch vernieuwd om {now.strftime("%H:%M")} · Elke 5 minuten
+st.markdown("""
+<div style="text-align:center;margin-top:1rem;color:rgba(255,255,255,0.15);
+     font-size:0.7rem;letter-spacing:2px;text-transform:uppercase;">
+    Automatisch vernieuwd elke 30 minuten
 </div>
 """, unsafe_allow_html=True)
