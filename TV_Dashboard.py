@@ -16,7 +16,7 @@ st.set_page_config(
 
 # ── Auto-refresh every 5 minutes ──────────────────────────────────────────────
 st.markdown("""
-    <meta http-equiv="refresh" content="300">
+    <meta http-equiv="refresh" content="1800">
 """, unsafe_allow_html=True)
 
 # ── Styling ───────────────────────────────────────────────────────────────────
