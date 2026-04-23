@@ -85,7 +85,7 @@ st.markdown("""
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CLIENT_ID     = "4db4f54a9c90230221da81f085ef3bd5.apps.carerix.io"
-CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "")
+CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 TOKEN_URL     = "https://id-s3.carerix.io/auth/realms/lincks/protocol/openid-connect/token"
 API_URL       = "https://api.carerix.io/graphql/v1/graphql"
 DATA_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
