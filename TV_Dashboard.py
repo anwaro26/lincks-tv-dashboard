@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import os
 import time as _time
 from datetime import datetime, timedelta
 import requests
 import base64
-import json
 
 st.set_page_config(
     page_title="Lincks Performance",
@@ -16,138 +14,114 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=Space+Grotesk:wght@400;500;700&family=Syne:wght@700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-    background: #050510;
-    color: white;
-}
-.stApp, [data-testid="stAppViewContainer"] { background: #050510; }
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; background: #0d0820; color: white; }
+.stApp, [data-testid="stAppViewContainer"] { background: #0d0820; }
 .block-container { padding: 0 !important; max-width: 100% !important; }
-footer, #MainMenu, header, [data-testid="collapsedControl"] { visibility: hidden !important; display: none !important; }
+footer, #MainMenu, header, [data-testid="collapsedControl"] { display: none !important; }
 section[data-testid="stSidebar"] { display: none !important; }
 
-/* Background grid */
+/* Grid bg */
 .stApp::before {
     content: '';
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background-image:
-        linear-gradient(rgba(233,32,118,0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(233,32,118,0.03) 1px, transparent 1px);
-    background-size: 60px 60px;
+    background-image: linear-gradient(rgba(233,32,118,0.04) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(233,32,118,0.04) 1px, transparent 1px);
+    background-size: 80px 80px;
     pointer-events: none; z-index: 0;
 }
 
-.dashboard-wrap { position: relative; z-index: 1; padding: 2rem 2.5rem; min-height: 100vh; }
+.wrap { position: relative; z-index: 1; padding: 1.5rem 2rem; }
 
 /* Header */
-.hdr {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 2rem;
-    padding-bottom: 1.5rem;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-.hdr-left { display: flex; align-items: center; gap: 1.5rem; }
-.hdr-badge {
-    background: linear-gradient(135deg, #e92076, #c41660);
-    color: white; font-family: 'Syne', sans-serif;
-    font-size: 0.6rem; font-weight: 800; letter-spacing: 3px;
-    padding: 0.3rem 0.8rem; border-radius: 4px; text-transform: uppercase;
-}
-.hdr-right { text-align: right; }
-.clock {
-    font-family: 'Syne', sans-serif; font-size: 3rem; font-weight: 800;
-    color: #e92076; line-height: 1; letter-spacing: -1px;
-}
-.clock-date { font-size: 0.72rem; color: rgba(255,255,255,0.3); letter-spacing: 2px; text-transform: uppercase; margin-top: 2px; }
+.hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.2rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.hdr-brand { display: flex; align-items: center; gap: 1rem; }
+.hdr-tag { background: #e92076; color: white; font-size: 0.55rem; font-weight: 800; letter-spacing: 3px; padding: 0.3rem 0.7rem; border-radius: 4px; text-transform: uppercase; }
+.clock { font-family: 'Syne', sans-serif; font-size: 2.8rem; font-weight: 800; color: #e92076; line-height: 1; letter-spacing: -1px; }
+.clock-date { font-size: 0.65rem; color: rgba(255,255,255,0.3); letter-spacing: 2px; text-transform: uppercase; margin-top: 2px; text-align: right; }
 
-/* Screen nav */
-.screen-nav {
-    display: flex; gap: 0.5rem; margin-bottom: 2rem; align-items: center;
+/* Nav tabs */
+.nav { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; align-items: center; flex-wrap: wrap; }
+.nav-tab {
+    padding: 0.5rem 1.2rem; border-radius: 8px; font-size: 0.75rem; font-weight: 600;
+    letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.4);
+    background: rgba(255,255,255,0.03); transition: all 0.2s;
+    text-decoration: none; display: inline-block;
 }
-.screen-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: rgba(255,255,255,0.15); transition: all 0.3s;
-}
-.screen-dot.active { background: #e92076; box-shadow: 0 0 12px rgba(233,32,118,0.6); width: 24px; border-radius: 4px; }
-.screen-label {
-    font-size: 0.65rem; color: rgba(255,255,255,0.3); letter-spacing: 3px;
-    text-transform: uppercase; margin-left: 1rem;
-}
+.nav-tab.active { background: #e92076; border-color: #e92076; color: white; box-shadow: 0 4px 20px rgba(233,32,118,0.4); }
+.nav-tab.exit { background: rgba(99,204,202,0.1); border-color: rgba(99,204,202,0.3); color: #63ccca; }
 
 /* Cards */
 .card {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 16px; padding: 1.5rem;
-    position: relative; overflow: hidden;
-    backdrop-filter: blur(10px);
-}
-.card::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(233,32,118,0.5), transparent);
-}
-.card-label {
-    font-size: 0.65rem; font-weight: 700; color: rgba(255,255,255,0.3);
-    text-transform: uppercase; letter-spacing: 3px; margin-bottom: 0.8rem;
-}
-.card-val { font-family: 'Syne', sans-serif; font-size: 3.2rem; font-weight: 800; line-height: 1; }
-.card-val.pink { color: #e92076; }
-.card-val.teal { color: #00d4c8; }
-.card-val.white { color: white; }
-.card-sub { font-size: 0.75rem; color: rgba(255,255,255,0.3); margin-top: 0.4rem; }
-
-/* Progress bar */
-.prog-wrap { margin-top: 1rem; }
-.prog-track { height: 4px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
-.prog-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #e92076, #ff6ab0); transition: width 1s ease; }
-
-/* Vacancy card */
-.vac-card {
-    background: rgba(255,255,255,0.02);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 12px; padding: 1rem 1.2rem;
-    margin-bottom: 0.7rem;
-    border-left: 3px solid #e92076;
-    transition: border-color 0.2s;
-}
-.vac-title { font-size: 0.95rem; font-weight: 600; color: white; margin-bottom: 0.3rem; }
-.vac-meta { font-size: 0.72rem; color: rgba(255,255,255,0.35); display: flex; gap: 1rem; flex-wrap: wrap; }
-.vac-meta span { display: flex; align-items: center; gap: 0.3rem; }
-
-/* Funnel KPI row */
-.funnel-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin-bottom: 2rem; }
-.fkpi {
     background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 14px; padding: 1.5rem 1rem; text-align: center;
-    position: relative; overflow: hidden;
+    border-radius: 16px; padding: 1.4rem; position: relative; overflow: hidden;
 }
-.fkpi::after { content: ''; position: absolute; bottom: 0; left: 20%; right: 20%; height: 2px; border-radius: 2px; }
-.fkpi.c1::after { background: #00d4c8; }
-.fkpi.c2::after { background: #e92076; }
-.fkpi.c3::after { background: #f5a623; }
-.fkpi.c4::after { background: #a78bfa; }
-.fkpi.c5::after { background: #00e5a0; }
-.fkpi-val { font-family: 'Syne', sans-serif; font-size: 3.5rem; font-weight: 800; line-height: 1; }
-.fkpi-label { font-size: 0.65rem; color: rgba(255,255,255,0.35); letter-spacing: 2px; text-transform: uppercase; margin-top: 0.5rem; }
+.card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(233,32,118,0.4), transparent); }
+.card-label { font-size: 0.6rem; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 3px; margin-bottom: 0.6rem; }
+.card-val { font-family: 'Syne', sans-serif; font-size: 3rem; font-weight: 800; line-height: 1; }
+.card-val.pink { color: #e92076; }
+.card-val.teal { color: #63ccca; }
+.card-sub { font-size: 0.72rem; color: rgba(255,255,255,0.3); margin-top: 0.4rem; }
+.prog-track { height: 3px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; margin-top: 1rem; }
+.prog-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #e92076, #ff6ab0); }
 
-/* Plotly override */
+/* Funnel KPI */
+.fkpi { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 1.5rem 1rem; text-align: center; position: relative; overflow: hidden; }
+.fkpi-val { font-family: 'Syne', sans-serif; font-size: 3.5rem; font-weight: 800; line-height: 1; }
+.fkpi-label { font-size: 0.6rem; color: rgba(255,255,255,0.35); letter-spacing: 2px; text-transform: uppercase; margin-top: 0.5rem; }
+.fkpi-bar { position: absolute; bottom: 0; left: 10%; right: 10%; height: 3px; border-radius: 2px; }
+
+/* Vacancy carousel */
+.vac-carousel { position: relative; overflow: hidden; width: 100%; }
+.vac-track { display: flex; transition: transform 0.6s cubic-bezier(0.4,0,0.2,1); }
+.vac-slide { min-width: 100%; padding: 0 1rem; }
+.vac-card-big {
+    background: linear-gradient(135deg, #1a0535 0%, #2d0a52 100%);
+    border: 1px solid rgba(233,32,118,0.3);
+    border-radius: 20px; padding: 2.5rem;
+    position: relative; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.vac-card-big::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #e92076, #63ccca); }
+.vac-card-big::after { content: ''; position: absolute; top: -50%; right: -20%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(233,32,118,0.08) 0%, transparent 70%); pointer-events: none; }
+.vac-num { font-size: 0.65rem; color: rgba(255,255,255,0.25); letter-spacing: 3px; text-transform: uppercase; margin-bottom: 0.5rem; }
+.vac-title-big { font-family: 'Syne', sans-serif; font-size: 2.8rem; font-weight: 800; color: white; margin-bottom: 1rem; line-height: 1.1; }
+.vac-company { font-size: 1.1rem; color: #63ccca; font-weight: 600; margin-bottom: 1.5rem; }
+.vac-pills { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 2rem; }
+.vac-pill { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 0.4rem 1rem; font-size: 0.8rem; color: rgba(255,255,255,0.6); }
+.vac-pill.highlight { background: rgba(233,32,118,0.15); border-color: rgba(233,32,118,0.3); color: #ff9dc7; }
+.vac-consultant { font-size: 0.75rem; color: rgba(255,255,255,0.35); }
+.vac-dots { display: flex; justify-content: center; gap: 0.5rem; margin-top: 1.5rem; }
+.vac-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); transition: all 0.3s; }
+.vac-dot.active { background: #e92076; width: 24px; border-radius: 4px; box-shadow: 0 0 10px rgba(233,32,118,0.5); }
+
+/* Small vac cards */
+.vac-card-sm {
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+    border-left: 3px solid #e92076; border-radius: 10px; padding: 0.9rem 1.1rem;
+    margin-bottom: 0.6rem;
+}
+.vac-sm-title { font-size: 0.9rem; font-weight: 600; color: white; margin-bottom: 0.2rem; }
+.vac-sm-meta { font-size: 0.7rem; color: rgba(255,255,255,0.35); }
+
+/* Plotly */
 .js-plotly-plot .plotly { background: transparent !important; }
 
-/* StSelectbox */
+/* Streamlit overrides */
 .stSelectbox > div > div { background: rgba(255,255,255,0.04) !important; border: 1px solid rgba(255,255,255,0.1) !important; color: white !important; border-radius: 8px !important; font-size: 0.8rem !important; }
 .stSelectbox label { color: rgba(255,255,255,0.3) !important; font-size: 0.65rem !important; letter-spacing: 2px !important; text-transform: uppercase !important; }
-.stButton > button { background: rgba(255,255,255,0.05) !important; color: rgba(255,255,255,0.5) !important; border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 8px !important; font-size: 0.72rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; }
+.stButton > button { background: rgba(255,255,255,0.05) !important; color: rgba(255,255,255,0.5) !important; border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 8px !important; font-size: 0.72rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; padding: 0.4rem 0.8rem !important; }
 .stButton > button:hover { background: rgba(233,32,118,0.2) !important; border-color: rgba(233,32,118,0.4) !important; color: white !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── JS: live clock + auto-switch ──────────────────────────────────────────────
+# ── JS: live clock ────────────────────────────────────────────────────────────
 st.markdown("""
 <script>
 const NL_D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
@@ -161,8 +135,6 @@ function tick(){
     const el2=document.getElementById('js-date'); if(el2) el2.textContent=d.toUpperCase();
 }
 tick(); setInterval(tick,1000);
-// Auto reload every 30 seconds for screen switching
-setTimeout(function(){ window.location.reload(); }, 30000);
 </script>
 """, unsafe_allow_html=True)
 
@@ -238,41 +210,51 @@ def fetch_new_invoices(since):
     return all_items
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_open_vacs():
-    closed = ["Geplaatst","Verloren","Vervallen"]
-    result = []
-    for pn in range(5):
-        q = f"""{{ crVacancyPage(pageable:{{page:{pn},size:100}}){{
-            totalElements items{{ _id creationDate statusDisplay jobTitle vacancyNo
-                toStatusNode{{label}} toCompany{{name}} owner{{firstName lastName}} matchCount agency{{name}} }}
-        }} }}"""
+def fetch_top_vacancies():
+    """Fetch 10 most recent active vacancies to show as top vacatures."""
+    all_vacs = []
+    closed = ["Geplaatst","Verloren","Vervallen","Ingetrokken"]
+    for pn in range(10):
+        q = f"""{{
+            crVacancyPage(pageable:{{page:{pn},size:100}}){{
+                totalElements
+                items{{
+                    _id jobTitle vacancyNo creationDate statusDisplay
+                    toCompany{{name}} owner{{firstName lastName}}
+                    agency{{name}} matchCount
+                    workLocation rawWorkLocation
+                    toFunctionLevel1{{label}}
+                }}
+            }}
+        }}"""
         data = run_query(q)
         if not data or not data.get("data"): break
         page = data.get("data",{}).get("crVacancyPage") or {}
         items = page.get("items",[])
         if not items: break
         for v in items:
-            if v.get("statusDisplay") not in closed: result.append(v)
-        if len(result) >= page.get("totalElements",0): break
+            if v.get("statusDisplay") not in closed and v.get("jobTitle") and v.get("jobTitle") != "--":
+                all_vacs.append(v)
+        if len(all_vacs) >= 10: break
         _time.sleep(0.2)
-    return result
+    # Sort by creation date desc, take top 10
+    all_vacs.sort(key=lambda x: x.get("creationDate",""), reverse=True)
+    return all_vacs[:10]
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_funnel(month_start):
     stats = {"nieuwe_vacatures":0,"eerste_gesprek":0,"tweede_gesprek":0,"aanbod":0,"geplaatst":0}
     try:
         q1 = f"""{{ crMatchPage(qualifier:"creationDate > (NSCalendarDate) '{month_start} 00:00:00'",pageable:{{page:0,size:500}}){{
-            totalElements items{{ _id statusInfo{{ name displayName }} }} }} }}"""
+            items{{ _id statusInfo{{ displayName }} }} }} }}"""
         d1 = run_query(q1)
         for m in (d1.get("data",{}).get("crMatchPage") or {}).get("items",[]):
             sn = str((m.get("statusInfo") or {}).get("displayName") or "")
             if "4.1" in sn: stats["eerste_gesprek"] += 1
             elif "4.2" in sn: stats["tweede_gesprek"] += 1
             elif "5.0" in sn: stats["aanbod"] += 1
-
         q2 = f"""{{ crJobPage(qualifier:"creationDate > (NSCalendarDate) '{month_start} 00:00:00'",pageable:{{page:0,size:1}}){{ totalElements }} }}"""
         stats["geplaatst"] = (run_query(q2).get("data",{}).get("crJobPage") or {}).get("totalElements",0)
-
         q3 = f"""{{ crVacancyPage(qualifier:"creationDate > (NSCalendarDate) '{month_start} 00:00:00'",pageable:{{page:0,size:1}}){{ totalElements }} }}"""
         stats["nieuwe_vacatures"] = (run_query(q3).get("data",{}).get("crVacancyPage") or {}).get("totalElements",0)
     except Exception as e:
@@ -360,9 +342,22 @@ if not data_ok or df.empty:
 # ── Screen state ──────────────────────────────────────────────────────────────
 if "screen" not in st.session_state: st.session_state["screen"] = 0
 if "last_sw" not in st.session_state: st.session_state["last_sw"] = _time.time()
-if _time.time() - st.session_state["last_sw"] > 30:
-    st.session_state["screen"] = (st.session_state["screen"] + 1) % 3
+if "manual" not in st.session_state: st.session_state["manual"] = False
+if "vac_idx" not in st.session_state: st.session_state["vac_idx"] = 0
+if "vac_last" not in st.session_state: st.session_state["vac_last"] = _time.time()
+
+# Auto-switch between screen 0 and 1 every 60s (not when on screen 2)
+if not st.session_state["manual"] and _time.time() - st.session_state["last_sw"] > 60:
+    st.session_state["screen"] = 1 - st.session_state["screen"]  # toggle 0 ↔ 1
     st.session_state["last_sw"] = _time.time()
+
+# Auto-advance vacancy carousel every 5s when on screen 2
+if st.session_state["screen"] == 2 and _time.time() - st.session_state["vac_last"] > 5:
+    st.session_state["vac_idx"] = (st.session_state["vac_idx"] + 1)
+    st.session_state["vac_last"] = _time.time()
+
+# Auto rerun every 5s
+st.markdown("<script>setTimeout(function(){ window.location.reload(); }, 5000);</script>", unsafe_allow_html=True)
 
 # ── Month ─────────────────────────────────────────────────────────────────────
 all_months = sorted(df["month"].unique().tolist(), reverse=True)
@@ -371,53 +366,48 @@ def_m = now_m if now_m in all_months else all_months[0]
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lincks_logo_fc-wit_def.png")
-logo_html = ""
 if os.path.exists(logo_path):
     with open(logo_path,"rb") as f: lb64 = base64.b64encode(f.read()).decode()
-    logo_html = f'<img src="data:image/png;base64,{lb64}" style="height:44px;" />'
+    logo_html = f'<img src="data:image/png;base64,{lb64}" style="height:42px;" />'
 else:
-    logo_html = '<span style="font-family:Syne,sans-serif;font-size:1.6rem;font-weight:800;color:white;letter-spacing:-1px;">LINCKS</span>'
+    logo_html = '<span style="font-family:Syne,sans-serif;font-size:1.5rem;font-weight:800;">LINCKS</span>'
 
 # ════════════════════════════════════════════════════════════════
 # LAYOUT
 # ════════════════════════════════════════════════════════════════
-st.markdown('<div class="dashboard-wrap">', unsafe_allow_html=True)
+st.markdown('<div class="wrap">', unsafe_allow_html=True)
 
 # Header
-scr = st.session_state["screen"]
-screen_names = ["Omzet","Funnel","Vacatures"]
 st.markdown(f"""
 <div class="hdr">
-    <div class="hdr-left">
+    <div class="hdr-brand">
         {logo_html}
-        <div>
-            <div class="hdr-badge">Performance</div>
-        </div>
+        <span class="hdr-tag">Performance</span>
     </div>
-    <div class="hdr-right">
+    <div style="text-align:right">
         <div class="clock" id="js-clock">--:--:--</div>
         <div class="clock-date" id="js-date">--</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Nav dots + controls
-dots_html = "".join([f'<div class="screen-dot {"active" if i==scr else ""}"></div>' for i in range(3)])
-st.markdown(f'<div class="screen-nav">{dots_html}<span class="screen-label">{screen_names[scr]}</span></div>', unsafe_allow_html=True)
-
-# Control row
-c1,c2,c3,c4,_sp,mc,ec = st.columns([0.8,0.8,0.8,0.8,2,1.5,1.5])
-with c1:
-    if st.button("💰 Omzet"):
-        st.session_state["screen"]=0; st.session_state["last_sw"]=_time.time(); st.rerun()
-with c2:
-    if st.button("📊 Funnel"):
-        st.session_state["screen"]=1; st.session_state["last_sw"]=_time.time(); st.rerun()
-with c3:
-    if st.button("📋 Vacatures"):
-        st.session_state["screen"]=2; st.session_state["last_sw"]=_time.time(); st.rerun()
-with c4:
-    if st.button("🔄"):
+# Nav + controls
+scr = st.session_state["screen"]
+nc1,nc2,nc3,nc4,_sp,mc,ec = st.columns([0.9,0.9,1.1,0.6,2,1.5,1.5])
+with nc1:
+    if st.button("💰 Omzet", key="b0"):
+        st.session_state["screen"]=0; st.session_state["last_sw"]=_time.time()
+        st.session_state["manual"]=False; st.rerun()
+with nc2:
+    if st.button("📊 Pipeline", key="b1"):
+        st.session_state["screen"]=1; st.session_state["last_sw"]=_time.time()
+        st.session_state["manual"]=False; st.rerun()
+with nc3:
+    if st.button("⭐ Top Vacatures", key="b2"):
+        st.session_state["screen"]=2; st.session_state["manual"]=True
+        st.session_state["vac_idx"]=0; st.session_state["vac_last"]=_time.time(); st.rerun()
+with nc4:
+    if st.button("🔄", key="br"):
         st.cache_data.clear()
         for k in ["tv_done","tv_inv"]: st.session_state.pop(k,None)
         st.rerun()
@@ -425,13 +415,20 @@ with mc:
     sel_m = st.selectbox("Maand", all_months, index=all_months.index(def_m), label_visibility="collapsed")
 with ec:
     st.markdown("""<a href="https://www.lincks.nl/vacatures" target="_blank"
-       style="display:block;text-align:center;background:rgba(255,255,255,0.04);
-       border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:0.5rem;
-       color:rgba(255,255,255,0.4);text-decoration:none;font-size:0.7rem;
-       letter-spacing:1px;text-transform:uppercase;margin-top:2px;">🌐 Vacaturesite ↗</a>""",
-       unsafe_allow_html=True)
+       style="display:block;text-align:center;background:rgba(99,204,202,0.08);
+       border:1px solid rgba(99,204,202,0.2);border-radius:8px;padding:0.48rem;
+       color:#63ccca;text-decoration:none;font-size:0.7rem;letter-spacing:1px;
+       text-transform:uppercase;margin-top:2px;">🌐 Vacaturesite ↗</a>""", unsafe_allow_html=True)
 
-st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
+# Active indicator
+screen_names = ["💰 Omzet","📊 Pipeline","⭐ Top Vacatures"]
+status_text = "🔁 Automatisch wisselend" if not st.session_state["manual"] else "📌 Handmatig vergrendeld op Top Vacatures"
+st.markdown(f"""
+<div style="display:flex;align-items:center;gap:1rem;margin:0.5rem 0 1.2rem 0;padding-bottom:0.8rem;border-bottom:1px solid rgba(255,255,255,0.05);">
+    <div style="font-size:0.65rem;color:rgba(255,255,255,0.25);letter-spacing:2px;text-transform:uppercase;">{screen_names[scr]}</div>
+    <div style="font-size:0.6rem;color:rgba(255,255,255,0.2);letter-spacing:1px;">{status_text}</div>
+</div>
+""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
 # SCREEN 0 — OMZET
@@ -441,38 +438,34 @@ if scr == 0:
     total_rev = filtered.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
     pct       = min(total_rev / COMPANY_TARGET * 100, 100)
     remaining = max(COMPANY_TARGET - total_rev, 0)
+    excl = filtered[~filtered["consultant"].isin(["Mireille Prooi","Onbekend"])]
+    top_c = excl.groupby("consultant")["revenue"].sum().idxmax() if not excl.empty else "—"
+    top_v = excl.groupby("consultant")["revenue"].sum().max() if not excl.empty else 0
 
-    # Top KPIs
     k1,k2,k3 = st.columns(3)
     with k1:
-        num_inv = len(filtered.drop_duplicates(subset=["consultant","amount","date"]))
         st.markdown(f"""<div class="card">
-            <div class="card-label">Maandomzet</div>
+            <div class="card-label">Maandomzet {sel_m}</div>
             <div class="card-val pink">€{total_rev:,.0f}</div>
-            <div class="card-sub">{num_inv} facturen · {sel_m}</div>
-            <div class="prog-wrap"><div class="prog-track"><div class="prog-fill" style="width:{pct}%"></div></div></div>
+            <div class="card-sub">doel €{COMPANY_TARGET:,.0f}</div>
+            <div class="prog-track"><div class="prog-fill" style="width:{pct:.1f}%"></div></div>
         </div>""", unsafe_allow_html=True)
     with k2:
-        excl = filtered[~filtered["consultant"].isin(["Mireille Prooi","Onbekend"])]
-        top_c = excl.groupby("consultant")["revenue"].sum().idxmax() if not excl.empty else "—"
-        top_v = excl.groupby("consultant")["revenue"].sum().max() if not excl.empty else 0
         st.markdown(f"""<div class="card">
             <div class="card-label">Top Recruiter</div>
-            <div class="card-val white" style="font-size:2rem;margin-top:0.3rem;">{top_c}</div>
+            <div class="card-val teal" style="font-size:1.8rem;margin-top:0.3rem;">{top_c}</div>
             <div class="card-sub">€{top_v:,.0f} deze maand</div>
         </div>""", unsafe_allow_html=True)
     with k3:
         st.markdown(f"""<div class="card">
             <div class="card-label">Target Voortgang</div>
             <div class="card-val {"teal" if pct>=100 else "pink"}">{pct:.0f}%</div>
-            <div class="card-sub">€{remaining:,.0f} te gaan · doel €{COMPANY_TARGET:,.0f}</div>
+            <div class="card-sub">€{remaining:,.0f} te gaan</div>
         </div>""", unsafe_allow_html=True)
 
-    st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-    # Charts
     col_donut, col_bar = st.columns([1, 2.2])
-
     with col_donut:
         fig = go.Figure(go.Pie(
             values=[total_rev, remaining], labels=["Behaald","Resterend"],
@@ -480,14 +473,14 @@ if scr == 0:
             marker_colors=["#e92076","rgba(255,255,255,0.04)"],
             marker=dict(line=dict(width=0)),
         ))
-        fig.add_annotation(text=f"<b>{pct:.0f}%</b>", x=0.5, y=0.58,
-            font=dict(size=60, color="#e92076", family="Syne"), showarrow=False)
-        fig.add_annotation(text=f"€{total_rev:,.0f}", x=0.5, y=0.40,
+        fig.add_annotation(text=f"<b>{pct:.0f}%</b>", x=0.5, y=0.60,
+            font=dict(size=64, color="#e92076", family="Syne"), showarrow=False)
+        fig.add_annotation(text=f"€{total_rev:,.0f}", x=0.5, y=0.42,
             font=dict(size=18, color="rgba(255,255,255,0.7)"), showarrow=False)
-        fig.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}", x=0.5, y=0.26,
+        fig.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}", x=0.5, y=0.27,
             font=dict(size=12, color="rgba(255,255,255,0.3)"), showarrow=False)
         fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            showlegend=False, margin=dict(l=10,r=10,t=10,b=10), height=360)
+            showlegend=False, margin=dict(l=10,r=10,t=10,b=10), height=380)
         st.plotly_chart(fig, use_container_width=True)
 
     with col_bar:
@@ -513,13 +506,11 @@ if scr == 0:
             text=rc.apply(lambda r: f"  €{r['revenue']:,.0f}  ·  {r['pct']:.0f}%", axis=1),
             textposition="inside", insidetextanchor="start",
             textfont=dict(color="white", size=13, family="DM Sans"),
-            hovertemplate="<b>%{y}</b><br>€%{x:,.0f}<extra></extra>",
         ))
         fig2.add_trace(go.Bar(
             x=rc["rest"], y=rc["consultant"], orientation="h", name="Resterend",
             marker_color="rgba(255,255,255,0.03)",
             marker_line_color="rgba(255,255,255,0.08)", marker_line_width=1,
-            hovertemplate="<b>%{y}</b><br>Nog: €%{x:,.0f}<extra></extra>",
         ))
         fig2.update_layout(
             barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
@@ -528,142 +519,168 @@ if scr == 0:
             yaxis=dict(tickfont=dict(size=14, family="DM Sans"), gridcolor="rgba(0,0,0,0)"),
             legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
                         font=dict(color="rgba(255,255,255,0.4)", size=11)),
-            margin=dict(l=0,r=10,t=30,b=0), height=360, bargap=0.25,
+            margin=dict(l=0,r=10,t=30,b=0), height=380, bargap=0.22,
         )
         st.plotly_chart(fig2, use_container_width=True)
 
 # ════════════════════════════════════════════════════════════════
-# SCREEN 1 — FUNNEL
+# SCREEN 1 — PIPELINE
 # ════════════════════════════════════════════════════════════════
 elif scr == 1:
     month_start = f"{sel_m}-01"
     with st.spinner(""):
         stats = fetch_funnel(month_start)
 
-    # KPI row
     kpi_items = [
-        ("Nieuwe Vacatures", stats["nieuwe_vacatures"], "#00d4c8", "c1"),
-        ("1e Gesprek Klant",  stats["eerste_gesprek"],  "#e92076", "c2"),
-        ("2e Gesprek Klant",  stats["tweede_gesprek"],  "#f5a623", "c3"),
-        ("Heeft Aanbod",      stats["aanbod"],          "#a78bfa", "c4"),
-        ("Geplaatst ✓",       stats["geplaatst"],       "#00e5a0", "c5"),
+        ("Nieuwe Vacatures", stats["nieuwe_vacatures"], "#63ccca", "#63ccca"),
+        ("1e Gesprek Klant",  stats["eerste_gesprek"],  "#e92076", "#e92076"),
+        ("2e Gesprek Klant",  stats["tweede_gesprek"],  "#f5a623", "#f5a623"),
+        ("Heeft Aanbod",      stats["aanbod"],          "#a78bfa", "#a78bfa"),
+        ("Geplaatst ✓",       stats["geplaatst"],       "#00e5a0", "#00e5a0"),
     ]
     cols = st.columns(5)
-    for col, (lbl, val, clr, cls) in zip(cols, kpi_items):
+    for col, (lbl, val, clr, bar_clr) in zip(cols, kpi_items):
         with col:
-            st.markdown(f"""<div class="fkpi {cls}">
+            st.markdown(f"""<div class="fkpi">
                 <div class="fkpi-val" style="color:{clr}">{val}</div>
                 <div class="fkpi-label">{lbl}</div>
+                <div class="fkpi-bar" style="background:{bar_clr}"></div>
             </div>""", unsafe_allow_html=True)
 
-    st.markdown("<div style='height:2rem'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
 
-    # Funnel chart
-    labels  = ["Nieuwe Vacatures","1e Gesprek","2e Gesprek","Aanbod","Geplaatst"]
-    values  = [stats["nieuwe_vacatures"], stats["eerste_gesprek"],
-               stats["tweede_gesprek"], stats["aanbod"], stats["geplaatst"]]
-    colors  = ["#00d4c8","#e92076","#f5a623","#a78bfa","#00e5a0"]
+    col_funnel, col_trend = st.columns([1.2, 1])
+    with col_funnel:
+        labels  = ["Nieuwe Vacatures","1e Gesprek","2e Gesprek","Aanbod","Geplaatst"]
+        values  = [stats["nieuwe_vacatures"], stats["eerste_gesprek"],
+                   stats["tweede_gesprek"], stats["aanbod"], stats["geplaatst"]]
+        colors  = ["#63ccca","#e92076","#f5a623","#a78bfa","#00e5a0"]
+        fig3 = go.Figure(go.Funnel(
+            y=labels, x=values, textinfo="value+percent initial",
+            marker=dict(color=colors, line=dict(width=0)),
+            connector=dict(line=dict(color="rgba(255,255,255,0.06)", width=2)),
+            textfont=dict(size=16, color="white", family="DM Sans"),
+        ))
+        fig3.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font_color="rgba(255,255,255,0.6)",
+            margin=dict(l=180,r=60,t=20,b=20), height=340,
+            yaxis=dict(tickfont=dict(size=14, family="DM Sans")),
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
-    fig3 = go.Figure(go.Funnel(
-        y=labels, x=values, textinfo="value+percent initial",
-        marker=dict(color=colors, line=dict(width=0)),
-        connector=dict(line=dict(color="rgba(255,255,255,0.06)", width=2)),
-        textfont=dict(size=17, color="white", family="Syne"),
-    ))
-    fig3.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="rgba(255,255,255,0.6)",
-        margin=dict(l=200,r=80,t=20,b=20), height=360,
-        yaxis=dict(tickfont=dict(size=15, family="DM Sans")),
-    )
-    st.plotly_chart(fig3, use_container_width=True)
+    with col_trend:
+        # Month-over-month revenue comparison
+        filtered_now = df[df["month"] == sel_m]
+        now_total = filtered_now.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
+        idx = all_months.index(sel_m)
+        prev_total = 0
+        if idx + 1 < len(all_months):
+            prev_m = all_months[idx+1]
+            prev_total = df[df["month"]==prev_m].drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
 
-    # Month comparison (current vs previous)
-    filtered_now  = df[df["month"] == sel_m]
-    prev_m_idx = all_months.index(sel_m)
-    prev_total = 0
-    if prev_m_idx + 1 < len(all_months):
-        prev_m = all_months[prev_m_idx + 1]
-        prev_total = df[df["month"]==prev_m].drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
-    now_total = filtered_now.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
-    delta = now_total - prev_total
-    delta_pct = (delta/prev_total*100) if prev_total > 0 else 0
-    arrow = "↑" if delta >= 0 else "↓"
-    col = "#00e5a0" if delta >= 0 else "#e92076"
-    st.markdown(f"""
-    <div class="card" style="text-align:center;padding:1rem 2rem;">
-        <div class="card-label">Omzet vs vorige maand</div>
-        <div style="font-family:Syne,sans-serif;font-size:2rem;font-weight:800;color:{col}">
-            {arrow} €{abs(delta):,.0f} &nbsp;<span style="font-size:1rem;opacity:0.7">({delta_pct:+.1f}%)</span>
+        delta = now_total - prev_total
+        delta_pct = (delta/prev_total*100) if prev_total > 0 else 0
+        arrow = "↑" if delta >= 0 else "↓"
+        clr = "#00e5a0" if delta >= 0 else "#e92076"
+
+        st.markdown(f"""
+        <div class="card" style="margin-bottom:1rem;">
+            <div class="card-label">Omzet vs vorige maand</div>
+            <div style="font-family:Syne,sans-serif;font-size:2.2rem;font-weight:800;color:{clr};margin-top:0.3rem;">
+                {arrow} €{abs(delta):,.0f}
+            </div>
+            <div class="card-sub">{delta_pct:+.1f}% ten opzichte van vorige maand</div>
         </div>
-    </div>""", unsafe_allow_html=True)
+        <div class="card">
+            <div class="card-label">Maandomzet {sel_m}</div>
+            <div class="card-val pink" style="font-size:2rem;">€{now_total:,.0f}</div>
+            <div class="card-sub">{min(now_total/COMPANY_TARGET*100,100):.0f}% van maandtarget €{COMPANY_TARGET:,.0f}</div>
+            <div class="prog-track"><div class="prog-fill" style="width:{min(now_total/COMPANY_TARGET*100,100):.1f}%"></div></div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# SCREEN 2 — VACATURES
+# SCREEN 2 — TOP VACATURES (carousel)
 # ════════════════════════════════════════════════════════════════
 elif scr == 2:
     with st.spinner(""):
-        open_vacs = fetch_open_vacs()
+        top_vacs = fetch_top_vacancies()
 
-    now = nl_now()
-    vrows = []
-    for v in open_vacs:
-        cr = pd.to_datetime(v.get("creationDate")) if v.get("creationDate") else None
-        days = (now - cr.replace(tzinfo=None)).days if cr else 0
+    if not top_vacs:
+        st.info("Geen vacatures gevonden.")
+    else:
+        idx = st.session_state["vac_idx"] % len(top_vacs)
+        v = top_vacs[idx]
+
         title = v.get("jobTitle") or "—"
-        if title in ("--","None","nan","None"): title = "Onbekend"
-        co = (v.get("toCompany") or {}).get("name","—")
+        company = (v.get("toCompany") or {}).get("name","—")
         ow = v.get("owner") or {}
-        cons = f"{ow.get('firstName','')} {ow.get('lastName','')}".strip() or "—"
-        ag = (v.get("agency") or {}).get("name","—")
-        vrows.append({"title":title,"company":co,"consultant":cons,"agency":ag,"days":days,"matches":v.get("matchCount") or 0})
+        consultant = f"{ow.get('firstName','')} {ow.get('lastName','')}".strip() or "—"
+        agency = (v.get("agency") or {}).get("name","—")
+        matches = v.get("matchCount") or 0
+        created = pd.to_datetime(v.get("creationDate")) if v.get("creationDate") else None
+        days_open = (nl_now() - created.replace(tzinfo=None)).days if created else 0
+        func = (v.get("toFunctionLevel1") or {}).get("label","")
+        location = v.get("workLocation") or v.get("rawWorkLocation") or "Nederland"
+        status = v.get("statusDisplay","")
+        vac_no = v.get("vacancyNo","")
 
-    vrows = sorted(vrows, key=lambda x: x["days"])
+        # Dots
+        dots = "".join([f'<div class="vac-dot {"active" if i==idx else ""}"></div>' for i in range(len(top_vacs))])
 
-    # Summary KPIs
-    k1,k2,k3 = st.columns(3)
-    with k1:
-        st.markdown(f"""<div class="card">
-            <div class="card-label">Open Vacatures</div>
-            <div class="card-val teal">{len(vrows)}</div>
-            <div class="card-sub">actief uitstaand</div>
-        </div>""", unsafe_allow_html=True)
-    with k2:
-        avg_days = sum(v["days"] for v in vrows) / len(vrows) if vrows else 0
-        st.markdown(f"""<div class="card">
-            <div class="card-label">Gem. Openstaand</div>
-            <div class="card-val white">{avg_days:.0f}<span style="font-size:1.5rem;"> dagen</span></div>
-            <div class="card-sub">gemiddeld open</div>
-        </div>""", unsafe_allow_html=True)
-    with k3:
-        total_matches = sum(v["matches"] for v in vrows)
-        st.markdown(f"""<div class="card">
-            <div class="card-label">Totaal Kandidaten</div>
-            <div class="card-val pink">{total_matches}</div>
-            <div class="card-sub">voorgesteld</div>
-        </div>""", unsafe_allow_html=True)
+        # Pills
+        pills = ""
+        if func and func != "Dossier": pills += f'<span class="vac-pill">{func}</span>'
+        if location: pills += f'<span class="vac-pill">📍 {location}</span>'
+        if matches: pills += f'<span class="vac-pill highlight">🎯 {matches} kandidaten</span>'
+        if days_open: pills += f'<span class="vac-pill">⏱ {days_open} dagen open</span>'
 
-    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        col_main, col_list = st.columns([1.6, 1])
 
-    # Vacancy cards in 3 cols
-    ca, cb, cc = st.columns(3)
-    cols3 = [ca, cb, cc]
-    for i, v in enumerate(vrows[:18]):
-        dc = "#e92076" if v["days"]>60 else ("#f5a623" if v["days"]>30 else "#63ccca")
-        with cols3[i%3]:
-            st.markdown(f"""<div class="vac-card">
-                <div class="vac-title">{v["title"]}</div>
-                <div class="vac-meta">
-                    <span>🏢 {v["company"]}</span>
-                    <span>👤 {v["consultant"]}</span>
-                    <span style="color:{dc}">⏱ {v["days"]}d</span>
-                    <span>🎯 {v["matches"]}</span>
-                </div>
-            </div>""", unsafe_allow_html=True)
+        with col_main:
+            st.markdown(f"""
+            <div class="vac-card-big">
+                <div class="vac-num">Vacature {vac_no} · {status}</div>
+                <div class="vac-title-big">{title}</div>
+                <div class="vac-company">🏢 {company}</div>
+                <div class="vac-pills">{pills}</div>
+                <div class="vac-consultant">👤 Recruiter: {consultant} · {agency}</div>
+            </div>
+            <div class="vac-dots">{dots}</div>
+            """, unsafe_allow_html=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
+            # Prev/Next buttons
+            btn_c1, btn_c2, btn_c3 = st.columns([1,1,4])
+            with btn_c1:
+                if st.button("← Vorige", key="vprev"):
+                    st.session_state["vac_idx"] = (idx - 1) % len(top_vacs)
+                    st.session_state["vac_last"] = _time.time()
+                    st.rerun()
+            with btn_c2:
+                if st.button("Volgende →", key="vnext"):
+                    st.session_state["vac_idx"] = (idx + 1) % len(top_vacs)
+                    st.session_state["vac_last"] = _time.time()
+                    st.rerun()
+
+        with col_list:
+            st.markdown('<div style="padding-left:0.5rem">', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.6rem;color:rgba(255,255,255,0.25);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.8rem;">Alle top vacatures</div>', unsafe_allow_html=True)
+            for i, vv in enumerate(top_vacs):
+                t2 = vv.get("jobTitle","—")
+                c2 = (vv.get("toCompany") or {}).get("name","—")
+                active_style = "border-left-color:#63ccca;background:rgba(99,204,202,0.05);" if i==idx else ""
+                st.markdown(f"""<div class="vac-card-sm" style="{active_style}cursor:pointer;">
+                    <div class="vac-sm-title">{t2}</div>
+                    <div class="vac-sm-meta">🏢 {c2}</div>
+                </div>""", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+# Footer
+screen_names_footer = ["💰 Omzet","📊 Pipeline","⭐ Top Vacatures"]
+auto_txt = "wisselt automatisch elke 60s" if not st.session_state["manual"] else "handmatig · klik ander scherm om te hervatten"
 st.markdown(f"""
-<div style="text-align:center;padding:1.5rem 0 0.5rem;color:rgba(255,255,255,0.1);font-size:0.6rem;letter-spacing:3px;text-transform:uppercase;">
-    Scherm {scr+1}/3 · {screen_names[scr]} · Wisselt elke 30s · Vernieuwd elke 30min
+<div style="text-align:center;padding:1.5rem 0 0.5rem;color:rgba(255,255,255,0.08);font-size:0.6rem;letter-spacing:3px;text-transform:uppercase;">
+    {screen_names_footer[scr]} · {auto_txt}
 </div>""", unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
