@@ -193,7 +193,17 @@ def compute_forecast(inv_raw, current_tot):
         elif same: wf=np.mean(same)
         elif other: wf=np.mean(other)
         else: return None
-        return round(current_tot/wf) if wf>0.01 else None
+        raw = round(current_tot/wf) if wf>0.01 else None
+        if raw is None: return None
+        # Cap: forecast can't be less than current, or more than 3x current
+        raw = max(raw, current_tot)
+        raw = min(raw, current_tot * 3)
+        # On last few days, forecast = current (no room to grow much)
+        days_left = days_remaining()
+        tot_d = total_days()
+        if days_left <= 2:
+            return round(current_tot * 1.02)
+        return raw
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
 
@@ -313,46 +323,78 @@ def load_invoice_df():
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_pipeline():
-    ms=f"{CURRENT_MONTH}-01"
+    """Load pipeline from matches parquet — fast, no API calls needed."""
     s={"eerste_gesprek":0,"tweede_gesprek":0,"aanbod":0,"geplaatst":0,
        "voorgesteld":0,"avg_ttf":None,"avg_tth":None}
     try:
-        q1=f"""{{ crMatchPage(qualifier:"creationDate > (NSCalendarDate) '{ms} 00:00:00'",
-            pageable:{{page:0,size:500}}){{
-            items{{ statusInfo{{ displayName }} }} }} }}"""
-        for m in (run_query(q1).get("data",{}).get("crMatchPage") or {}).get("items",[]):
-            sn=str((m.get("statusInfo") or {}).get("displayName") or "")
-            if "3." in sn or "4.0" in sn: s["voorgesteld"]+=1
-            if "4.1" in sn: s["eerste_gesprek"]+=1
-            elif "4.2" in sn: s["tweede_gesprek"]+=1
-            elif "5.0" in sn: s["aanbod"]+=1
-        q2=f"""{{ crJobPage(qualifier:"creationDate > (NSCalendarDate) '{ms} 00:00:00'",
-            pageable:{{page:0,size:1}}){{ totalElements }} }}"""
-        s["geplaatst"]=(run_query(q2).get("data",{}).get("crJobPage") or {}).get("totalElements",0)
-        # TTF/TTH from placements parquet
-        pl=pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
-        pl["creation_date"]=pd.to_datetime(pl.get("creation_date",""),errors="coerce")
-        pl["vacancy_created"]=pd.to_datetime(pl.get("vacancy_created",""),errors="coerce")
-        pl["match_created"]=pd.to_datetime(pl.get("match_created",""),errors="coerce")
-        pl["month"]=pl["creation_date"].dt.strftime("%Y-%m")
-        cur_pl=pl[pl["month"]==CURRENT_MONTH].copy()
+        # Load matches parquet
+        matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
+        matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
+        matches["month"] = matches["creation_date"].dt.strftime("%Y-%m")
+        cur_m = matches[matches["month"] == CURRENT_MONTH].copy()
+
+        if not cur_m.empty:
+            for _, row in cur_m.iterrows():
+                sn = str(row.get("status_display") or row.get("status_name") or "")
+                # Voorgesteld = any active stage (not final rejected)
+                if not row.get("is_final", False):
+                    s["voorgesteld"] += 1
+                # 1e gesprek klant = stages 4.x
+                if any(f"4.{x}" in sn for x in ["1","2","3","4","5"]):
+                    s["eerste_gesprek"] += 1
+                # 2e gesprek = 4.2+
+                if any(f"4.{x}" in sn for x in ["2","3","4","5"]) or "2e gesprek" in sn.lower():
+                    s["tweede_gesprek"] += 1
+                # Aanbod = 5.x
+                if sn.startswith("5.") or "aanbod" in sn.lower():
+                    s["aanbod"] += 1
+                # Geplaatst
+                if row.get("is_successfully_filled") or row.get("has_job"):
+                    s["geplaatst"] += 1
+
+        # Placements for geplaatst count + TTF/TTH
+        pl = pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
+        pl["creation_date"] = pd.to_datetime(pl.get("creation_date",""), errors="coerce")
+        pl["vacancy_created"] = pd.to_datetime(pl.get("vacancy_created",""), errors="coerce")
+        pl["match_created"] = pd.to_datetime(pl.get("match_created",""), errors="coerce")
+        pl["month"] = pl["creation_date"].dt.strftime("%Y-%m")
+        cur_pl = pl[pl["month"] == CURRENT_MONTH].copy()
+
+        # Use placements count as geplaatst (more reliable)
         if not cur_pl.empty:
-            cur_pl["ttf"]=(cur_pl["creation_date"]-cur_pl["vacancy_created"]).dt.days
-            cur_pl["tth"]=(cur_pl["creation_date"]-cur_pl["match_created"]).dt.days
-            ttf=cur_pl["ttf"].dropna()
-            tth=cur_pl["tth"].dropna()
-            ttf=ttf[(ttf>0)&(ttf<500)]
-            tth=tth[(tth>0)&(tth<500)]
-            if not ttf.empty: s["avg_ttf"]=round(ttf.mean())
-            if not tth.empty: s["avg_tth"]=round(tth.mean())
+            s["geplaatst"] = len(cur_pl)
+            ttf = (cur_pl["creation_date"]-cur_pl["vacancy_created"]).dt.days.dropna()
+            tth = (cur_pl["creation_date"]-cur_pl["match_created"]).dt.days.dropna()
+            ttf = ttf[(ttf>0)&(ttf<500)]
+            tth = tth[(tth>0)&(tth<500)]
+            if not ttf.empty: s["avg_ttf"] = round(ttf.mean())
+            if not tth.empty: s["avg_tth"] = round(tth.mean())
+
+        # If matches parquet is empty for current month, try API
+        if s["voorgesteld"] == 0 and CLIENT_SECRET:
+            ms = f"{CURRENT_MONTH}-01"
+            q2 = f"""{{ crJobPage(qualifier:"creationDate > (NSCalendarDate) '{ms} 00:00:00'",
+                pageable:{{page:0,size:1}}){{ totalElements }} }}"""
+            s["geplaatst"] = max(s["geplaatst"],
+                (run_query(q2).get("data",{}).get("crJobPage") or {}).get("totalElements",0))
+
     except Exception as e: print(f"[PIPELINE] {e}")
     return s
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_vacancies():
-    result=[]
-    for pn in range(200):
-        q=f"""{{ crVacancyPage(pageable:{{page:{pn},size:100}}){{
+    """Paginate backwards from last page to find recent active vacancies fast."""
+    # First get total
+    probe = run_query("{ crVacancyPage(pageable:{page:0,size:1}){ totalElements } }")
+    total = (probe.get("data",{}).get("crVacancyPage") or {}).get("totalElements", 0)
+    if not total: return [], 0
+
+    page_size = 100
+    last_page = (total - 1) // page_size
+    result = []
+    # Search backwards from most recent pages
+    for pn in range(last_page, max(-1, last_page - 30), -1):
+        q=f"""{{ crVacancyPage(pageable:{{page:{pn},size:{page_size}}}){{
             totalElements items{{
                 _id jobTitle vacancyNo creationDate statusDisplay
                 toCompany{{name}} owner{{firstName lastName}} agency{{name}}
@@ -362,18 +404,36 @@ def load_vacancies():
         }} }}"""
         data=run_query(q)
         if not data or not data.get("data"): break
-        page=data.get("data",{}).get("crVacancyPage") or {}
-        items=page.get("items",[])
+        items=(data.get("data",{}).get("crVacancyPage") or {}).get("items",[])
         if not items: break
         for v in items:
-            if v.get("statusDisplay") in ACTIVE_STATUSES \
-               and v.get("jobTitle") and v.get("jobTitle") not in ("--","None"):
+            if v.get("statusDisplay") in ACTIVE_STATUSES                and v.get("jobTitle") and v.get("jobTitle") not in ("--","None"):
                 result.append(v)
-        fetched=(pn+1)*100
-        if fetched>=page.get("totalElements",0): break
+        if len(result) >= 10: break
         _time.sleep(0.2)
-    result.sort(key=lambda x:x.get("creationDate",""),reverse=True)
-    total_count=len(result)
+
+    # Also check first few pages for active ones
+    if len(result) < 10:
+        for pn in range(min(5, last_page)):
+            q=f"""{{ crVacancyPage(pageable:{{page:{pn},size:{page_size}}}){{
+                items{{
+                    _id jobTitle vacancyNo creationDate statusDisplay
+                    toCompany{{name}} owner{{firstName lastName}} agency{{name}}
+                    workLocation rawWorkLocation toFunctionLevel1{{label}}
+                    jobDescription
+                }}
+            }} }}"""
+            data=run_query(q)
+            if not data or not data.get("data"): break
+            items=(data.get("data",{}).get("crVacancyPage") or {}).get("items",[])
+            for v in items:
+                if v.get("statusDisplay") in ACTIVE_STATUSES                    and v.get("jobTitle") and v.get("jobTitle") not in ("--","None"):
+                    if not any(x["_id"]==v["_id"] for x in result):
+                        result.append(v)
+            _time.sleep(0.2)
+
+    total_count = len(result)
+    result.sort(key=lambda x:x.get("creationDate",""), reverse=True)
     return result[:10], total_count
 
 # ── Load all ──────────────────────────────────────────────────────────────────
@@ -594,7 +654,7 @@ def render_screen():
                         tickprefix="€",tickfont=dict(size=10)),
                     legend=dict(orientation="h",yanchor="bottom",y=1.01,
                         xanchor="right",x=1,font=dict(color="rgba(255,255,255,0.4)",size=10)),
-                    margin=dict(l=0,r=10,t=30,b=0),height=300)
+                    margin=dict(l=0,r=10,t=30,b=0),height=240)
                 st.plotly_chart(fig_rev,use_container_width=True)
             else:
                 # Fallback: recruiter bar chart
