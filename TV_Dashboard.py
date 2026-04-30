@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import requests
 import base64
 import streamlit.components.v1 as components
+import numpy as np
 
 st.set_page_config(
     page_title="Lincks Performance",
@@ -32,21 +33,19 @@ section[data-testid="stSidebar"]{display:none!important;}
 .hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;}
 .hdr-left{display:flex;align-items:center;gap:1.2rem;}
 .hdr-badge{background:#e92076;color:white;font-size:0.55rem;font-weight:700;letter-spacing:3px;padding:0.25rem 0.7rem;border-radius:3px;text-transform:uppercase;}
-.clock{font-family:'Syne',sans-serif;font-size:3.2rem;font-weight:800;color:#e92076;line-height:1;letter-spacing:-2px;}
-.clock-date{font-size:0.62rem;color:rgba(255,255,255,0.25);letter-spacing:3px;text-transform:uppercase;margin-top:3px;text-align:right;}
 .divider{height:1px;background:rgba(255,255,255,0.06);margin-bottom:1.2rem;}
 .card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:1.5rem;position:relative;overflow:hidden;}
 .card-top{position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#e92076,transparent);}
 .card-label{font-size:0.58rem;font-weight:600;color:rgba(255,255,255,0.25);text-transform:uppercase;letter-spacing:3px;margin-bottom:0.7rem;}
 .card-val{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;line-height:1;}
-.pink{color:#e92076;}.teal{color:#00d4c8;}.green{color:#00e5a0;}
+.pink{color:#e92076;}.teal{color:#00d4c8;}.green{color:#00e5a0;}.orange{color:#f5a623;}
 .card-sub{font-size:0.7rem;color:rgba(255,255,255,0.25);margin-top:0.5rem;}
 .prog{height:2px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:1rem;overflow:hidden;}
 .prog-fill{height:100%;background:linear-gradient(90deg,#e92076,#ff6ab0);border-radius:2px;}
 .fkpi{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:1.8rem 1rem;text-align:center;}
 .fkpi-val{font-family:'Syne',sans-serif;font-size:3.8rem;font-weight:800;line-height:1;}
 .fkpi-lbl{font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:2px;text-transform:uppercase;margin-top:0.6rem;}
-.vac-big{background:linear-gradient(145deg,#150330 0%,#220844 60%,#1a0535 100%);border:1px solid rgba(233,32,118,0.2);border-radius:18px;padding:2.5rem 2.8rem;position:relative;overflow:hidden;min-height:320px;}
+.vac-big{background:linear-gradient(145deg,#150330 0%,#220844 60%,#1a0535 100%);border:1px solid rgba(233,32,118,0.2);border-radius:18px;padding:2.5rem 2.8rem;position:relative;overflow:hidden;min-height:300px;}
 .vac-big::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#e92076 0%,#63ccca 50%,transparent 100%);}
 .vac-meta-tag{font-size:0.6rem;color:rgba(255,255,255,0.25);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.8rem;}
 .vac-title{font-family:'Syne',sans-serif;font-size:2.6rem;font-weight:800;color:white;line-height:1.1;margin-bottom:0.8rem;}
@@ -62,10 +61,14 @@ section[data-testid="stSidebar"]{display:none!important;}
 .vac-sm.cur{border-left-color:#00d4c8;background:rgba(0,212,200,0.04);}
 .vac-sm-t{font-size:0.85rem;font-weight:600;color:white;margin-bottom:0.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .vac-sm-c{font-size:0.68rem;color:rgba(255,255,255,0.3);}
-.stSelectbox>div>div{background:rgba(255,255,255,0.04)!important;border:1px solid rgba(255,255,255,0.08)!important;color:white!important;border-radius:8px!important;font-size:0.8rem!important;}
-.stButton>button{background:rgba(255,255,255,0.04)!important;color:rgba(255,255,255,0.45)!important;border:1px solid rgba(255,255,255,0.08)!important;border-radius:8px!important;font-size:0.7rem!important;letter-spacing:1.5px!important;text-transform:uppercase!important;font-weight:600!important;padding:0.45rem 1rem!important;transition:all 0.15s!important;}
-.stButton>button:hover{background:rgba(233,32,118,0.15)!important;border-color:rgba(233,32,118,0.35)!important;color:white!important;}
-.stButton>button:active{background:#e92076!important;border-color:#e92076!important;color:white!important;}
+/* Nav — subtle */
+.stButton>button{
+    background:transparent!important;color:rgba(255,255,255,0.3)!important;
+    border:1px solid rgba(255,255,255,0.08)!important;border-radius:6px!important;
+    font-size:0.65rem!important;letter-spacing:2px!important;text-transform:uppercase!important;
+    font-weight:500!important;padding:0.35rem 0.8rem!important;transition:all 0.15s!important;
+}
+.stButton>button:hover{background:rgba(233,32,118,0.1)!important;border-color:rgba(233,32,118,0.25)!important;color:rgba(255,255,255,0.7)!important;}
 </style>
 <meta http-equiv="refresh" content="7200">
 """, unsafe_allow_html=True)
@@ -113,16 +116,100 @@ def get_last_sync():
         except: pass
     return "2026-04-02"
 
-# ── Cached data functions — TTL 2 hours ──────────────────────────────────────
+def days_remaining_in_month():
+    n = nl_now()
+    if n.month == 12:
+        last = n.replace(year=n.year+1, month=1, day=1) - timedelta(days=1)
+    else:
+        last = n.replace(month=n.month+1, day=1) - timedelta(days=1)
+    return (last - n).days + 1
+
+def days_in_month():
+    n = nl_now()
+    if n.month == 12:
+        last = n.replace(year=n.year+1, month=1, day=1) - timedelta(days=1)
+    else:
+        last = n.replace(month=n.month+1, day=1) - timedelta(days=1)
+    return last.day
+
+def day_of_month():
+    return nl_now().day
+
+# ── Revenue forecast using weighted historical day pattern ────────────────────
+def compute_forecast(inv_raw, current_tot):
+    """
+    Weighted day-pattern extrapolation:
+    - Same month previous years: 60% weight
+    - All other months: 40% weight
+    Returns expected month-end total.
+    """
+    try:
+        today_day = day_of_month()
+        cur_month_num = nl_now().month
+        cur_month_str = CURRENT_MONTH
+
+        # Parse dates
+        df = inv_raw.copy()
+        df["_date"] = pd.to_datetime(df.get("date", df.get("value_date", "")), errors="coerce")
+        df = df[df["_date"].notna()].copy()
+        df["_month"] = df["_date"].dt.strftime("%Y-%m")
+        df["_day"]   = df["_date"].dt.day
+        df["_total"] = pd.to_numeric(df.get("total", 0), errors="coerce").fillna(0)
+        df["_status"]= df.get("status","").astype(str)
+
+        # Only Verzonden, exclude current month
+        df = df[(df["_status"] == "Verzonden") & (df["_month"] != cur_month_str)]
+        if df.empty: return None
+
+        # For each historical month, compute cumulative fraction up to each day
+        months = df["_month"].unique()
+        same_month_patterns = []
+        other_month_patterns = []
+
+        for m in months:
+            mdf = df[df["_month"] == m].copy()
+            month_total = mdf["_total"].sum()
+            if month_total <= 0: continue
+
+            # Cumulative fraction up to today_day
+            cum = mdf[mdf["_day"] <= today_day]["_total"].sum()
+            frac = cum / month_total
+            if frac <= 0 or frac > 1: continue
+
+            month_num = int(m.split("-")[1])
+            if month_num == cur_month_num:
+                same_month_patterns.append(frac)
+            else:
+                other_month_patterns.append(frac)
+
+        # Weighted average
+        if same_month_patterns and other_month_patterns:
+            same_avg = np.mean(same_month_patterns)
+            other_avg = np.mean(other_month_patterns)
+            weighted_frac = 0.6 * same_avg + 0.4 * other_avg
+        elif same_month_patterns:
+            weighted_frac = np.mean(same_month_patterns)
+        elif other_month_patterns:
+            weighted_frac = np.mean(other_month_patterns)
+        else:
+            return None
+
+        if weighted_frac <= 0.01: return None
+        forecast = current_tot / weighted_frac
+        return round(forecast)
+    except Exception as e:
+        print(f"[FORECAST] {e}")
+        return None
+
+# ── Cached data ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_invoice_df():
-    """Load parquet, filter to current+prev month only, build df. Cached 2h."""
     users_df = pd.read_parquet(os.path.join(DATA_DIR,"users.parquet"))
     users    = dict(zip(users_df["user_id"], users_df["full_name"]))
     pl       = pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
     inv_raw  = pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet"))
 
-    # Incremental fetch for new invoices
+    # Incremental fetch
     last_sync = get_last_sync()
     today = nl_now().strftime("%Y-%m-%d")
     if last_sync < today and CLIENT_SECRET:
@@ -160,17 +247,17 @@ def load_invoice_df():
         except Exception as e:
             print(f"[FETCH] {e}")
 
-    # ── Filter to current + prev month BEFORE building df ────────────────────
-    # Parse best date first
-    inv_raw["_vd"] = pd.to_datetime(inv_raw.get("value_date", inv_raw.get("date", "")), errors="coerce")
+    # Compute forecast BEFORE filtering (needs all historical data)
+    forecast = compute_forecast(inv_raw, 0)  # placeholder, will pass actual tot later
+
+    # Filter to current + prev month for display
+    inv_raw["_vd"] = pd.to_datetime(inv_raw.get("value_date", ""), errors="coerce")
     inv_raw["_d"]  = pd.to_datetime(inv_raw.get("date", ""), errors="coerce")
     inv_raw["_best"] = inv_raw[["_vd","_d"]].max(axis=1)
     inv_raw["_month"] = inv_raw["_best"].dt.strftime("%Y-%m")
-
-    # Keep only current and previous month — huge speed win
     inv_filtered = inv_raw[inv_raw["_month"].isin([CURRENT_MONTH, PREV_MONTH])].copy()
 
-    # Build df
+    # Build display df
     job_map = {str(p["placement_id"]): p for _, p in pl.iterrows()}
     rows = []
     for _, i in inv_filtered.iterrows():
@@ -202,11 +289,17 @@ def load_invoice_df():
         rp = adj / len(cons)
         for c in cons:
             rows.append({"consultant":c,"amount":adj,"revenue":rp,"date":date,"month":month})
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+
+    # Recompute forecast with actual current total
+    cur_tot = df[df["month"]==CURRENT_MONTH].drop_duplicates(subset=["consultant","amount","date"])["amount"].sum() if not df.empty else 0
+    forecast = compute_forecast(inv_raw, cur_tot)
+
+    return df, forecast
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_funnel():
-    """Fetch funnel stats for current month. Cached 2h."""
     ms = f"{CURRENT_MONTH}-01"
     s  = {"nieuwe_vacatures":0,"eerste_gesprek":0,"tweede_gesprek":0,"aanbod":0,"geplaatst":0}
     try:
@@ -226,7 +319,6 @@ def load_funnel():
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_vacancies():
-    """Fetch 10 recent active vacancies. Cached 2h."""
     closed = ["Geplaatst","Verloren","Vervallen","Ingetrokken"]
     result = []
     for pn in range(15):
@@ -242,44 +334,79 @@ def load_vacancies():
         page = data.get("data",{}).get("crVacancyPage") or {}
         items = page.get("items",[])
         if not items: break
-        for v in items:
-            if v.get("statusDisplay") not in closed and v.get("jobTitle") and v.get("jobTitle") not in ("--","None"):
-                result.append(v)
+        open_vacs = [v for v in items if v.get("statusDisplay") not in closed
+                     and v.get("jobTitle") and v.get("jobTitle") not in ("--","None")]
+        result.extend(open_vacs)
         if len(result) >= 10: break
         _time.sleep(0.2)
+    # Get total open count separately
+    total_open = len(result)
     result.sort(key=lambda x: x.get("creationDate",""), reverse=True)
-    return result[:10]
+    return result[:10], total_open
 
-# ── Load all data once ────────────────────────────────────────────────────────
+@st.cache_data(ttl=7200, show_spinner=False)
+def load_open_vac_count():
+    """Fast count of all open vacancies."""
+    closed = ["Geplaatst","Verloren","Vervallen","Ingetrokken"]
+    count = 0
+    for pn in range(150):
+        q = f"""{{ crVacancyPage(pageable:{{page:{pn},size:100}}){{
+            totalElements items{{ _id statusDisplay }}
+        }} }}"""
+        data = run_query(q)
+        if not data or not data.get("data"): break
+        page = data.get("data",{}).get("crVacancyPage") or {}
+        items = page.get("items",[])
+        if not items: break
+        count += sum(1 for v in items if v.get("statusDisplay") not in closed)
+        fetched = (pn+1)*100
+        if fetched >= page.get("totalElements",0): break
+        _time.sleep(0.15)
+    return count
+
+# ── Load all data ─────────────────────────────────────────────────────────────
 with st.spinner(""):
     try:
-        df      = load_invoice_df()
-        stats   = load_funnel()
-        vacs    = load_vacancies()
-        data_ok = True
+        (df, forecast) = load_invoice_df()
+        stats          = load_funnel()
+        vacs, _        = load_vacancies()
+        open_vac_count = load_open_vac_count()
+        data_ok        = True
     except Exception as e:
         st.error(f"Error: {e}"); data_ok = False
 
 if not data_ok or df.empty:
     st.warning("Geen data."); st.stop()
 
-# Pre-compute current month data once
-df_cur  = df[df["month"] == CURRENT_MONTH]
-df_prev = df[df["month"] == PREV_MONTH]
-tot     = df_cur.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
-prev_tot= df_prev.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
-pct     = min(tot / COMPANY_TARGET * 100, 100)
-rem     = max(COMPANY_TARGET - tot, 0)
-delta   = tot - prev_tot
-dpc     = (delta/prev_tot*100) if prev_tot > 0 else 0
-excl    = df_cur[~df_cur["consultant"].isin(["Mireille Prooi","Onbekend"])]
-top_c   = excl.groupby("consultant")["revenue"].sum().idxmax() if not excl.empty else "—"
-top_v   = excl.groupby("consultant")["revenue"].sum().max() if not excl.empty else 0
+# Pre-compute
+df_cur   = df[df["month"] == CURRENT_MONTH]
+df_prev  = df[df["month"] == PREV_MONTH]
+tot      = df_cur.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
+prev_tot = df_prev.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
+pct      = min(tot / COMPANY_TARGET * 100, 100)
+rem      = max(COMPANY_TARGET - tot, 0)
+delta    = tot - prev_tot
+dpc      = (delta/prev_tot*100) if prev_tot > 0 else 0
+excl     = df_cur[~df_cur["consultant"].isin(["Mireille Prooi","Onbekend"])]
+days_rem = days_remaining_in_month()
 
-# ── Screen state ──────────────────────────────────────────────────────────────
-if "screen" not in st.session_state: st.session_state["screen"] = 0
-if "vac_idx" not in st.session_state: st.session_state["vac_idx"] = 0
-if "manual" not in st.session_state: st.session_state["manual"] = False
+# ── State ─────────────────────────────────────────────────────────────────────
+if "screen"   not in st.session_state: st.session_state["screen"]   = 0
+if "vac_idx"  not in st.session_state: st.session_state["vac_idx"]  = 0
+if "locked"   not in st.session_state: st.session_state["locked"]   = False
+if "last_sw"  not in st.session_state: st.session_state["last_sw"]  = _time.time()
+if "vac_ts"   not in st.session_state: st.session_state["vac_ts"]   = _time.time()
+
+# Auto-switch 0↔1 every 60s unless locked
+now_t = _time.time()
+if not st.session_state["locked"] and now_t - st.session_state["last_sw"] > 60:
+    st.session_state["screen"] = 1 - st.session_state["screen"]
+    st.session_state["last_sw"] = now_t
+
+# Auto-advance carousel every 6s when on screen 2
+if st.session_state["screen"] == 2 and now_t - st.session_state["vac_ts"] > 6:
+    st.session_state["vac_idx"] = (st.session_state["vac_idx"] + 1)
+    st.session_state["vac_ts"] = now_t
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lincks_logo_fc-wit_def.png")
@@ -289,99 +416,135 @@ if os.path.exists(logo_path):
 else:
     logo_html = '<span style="font-family:Syne,sans-serif;font-size:1.4rem;font-weight:800;">LINCKS</span>'
 
-# ════════════════════════════════════════════════════════════════
-# STATIC HEADER — rendered once, never changes
-# ════════════════════════════════════════════════════════════════
-st.markdown(f"""
-<div class="wrap">
-<div class="hdr">
-    <div class="hdr-left">
-        {logo_html}
-        <span class="hdr-badge">Live · {CURRENT_MONTH}</span>
-    </div>
-    <div style="text-align:right;min-width:220px;min-height:80px"></div>
-</div>
-<div class="divider"></div>
-""", unsafe_allow_html=True)
+scr = st.session_state["screen"]
 
 # ════════════════════════════════════════════════════════════════
-# NAV — fragment so only nav rerenders on click
+# LAYOUT
 # ════════════════════════════════════════════════════════════════
+st.markdown('<div class="wrap">', unsafe_allow_html=True)
+
+# Header — logo left, clock right via component
+hdr_left, hdr_right = st.columns([3, 1])
+with hdr_left:
+    st.markdown(f"""
+    <div class="hdr" style="margin-bottom:0">
+        <div class="hdr-left">
+            {logo_html}
+            <span class="hdr-badge">Live · {CURRENT_MONTH}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+with hdr_right:
+    components.html("""
+    <!DOCTYPE html><html><head>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&family=Inter:wght@500&display=swap" rel="stylesheet">
+    <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{background:transparent;overflow:hidden;}
+    #w{text-align:right;padding:0.2rem 0;}
+    #c{font-family:'Syne','Arial Black',sans-serif;font-size:2.6rem;font-weight:800;
+       color:#e92076;line-height:1;letter-spacing:-1px;
+       text-shadow:0 0 30px rgba(233,32,118,0.5);}
+    #d{font-family:'Inter',sans-serif;font-size:0.6rem;color:rgba(255,255,255,0.25);
+       letter-spacing:3px;text-transform:uppercase;margin-top:3px;}
+    </style></head><body>
+    <div id="w"><div id="c">--:--:--</div><div id="d">--</div></div>
+    <script>
+    var D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
+    var M=['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+    function getNL(){return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"}));}
+    function tick(){
+        var n=getNL();
+        var c=('0'+n.getHours()).slice(-2)+':'+('0'+n.getMinutes()).slice(-2)+':'+('0'+n.getSeconds()).slice(-2);
+        var d=D[n.getDay()]+' '+n.getDate()+' '+M[n.getMonth()]+' '+n.getFullYear();
+        document.getElementById('c').textContent=c;
+        document.getElementById('d').textContent=d.toUpperCase();
+    }
+    tick();setInterval(tick,1000);
+    </script></body></html>
+    """, height=80, scrolling=False)
+
+st.markdown('<div class="divider" style="margin-top:0.8rem"></div>', unsafe_allow_html=True)
+
+# ── Nav — subtle, minimal ─────────────────────────────────────────────────────
 @st.fragment
 def render_nav():
-    n1,n2,n3,n4,_sp,ec = st.columns([0.8,0.8,1.1,0.55,3.2,1.4])
+    n1,n2,n3 = st.columns([1,1,1.5])
     with n1:
-        if st.button("💰 Omzet", key="b0"):
-            st.session_state.update({"screen":0,"manual":False})
+        if st.button("Omzet", key="b0"):
+            st.session_state.update({"screen":0,"locked":False,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n2:
-        if st.button("📊 Pipeline", key="b1"):
-            st.session_state.update({"screen":1,"manual":False})
+        if st.button("Pipeline", key="b1"):
+            st.session_state.update({"screen":1,"locked":False,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n3:
-        if st.button("⭐ Top Vacatures", key="b2"):
-            st.session_state.update({"screen":2,"manual":True,"vac_idx":0})
+        if st.button("★  Toon Vacatures  (vergrendelt scherm)", key="b2"):
+            st.session_state.update({"screen":2,"locked":True,"vac_idx":0,"vac_ts":_time.time()})
             st.rerun(scope="app")
-    with n4:
-        if st.button("↺", key="br"):
-            st.cache_data.clear()
-            st.rerun(scope="app")
-    with ec:
-        st.markdown("""<a href="https://www.lincks.nl/vacatures" target="_blank"
-           style="display:flex;align-items:center;justify-content:center;
-           background:rgba(0,212,200,0.07);border:1px solid rgba(0,212,200,0.18);
-           border-radius:8px;padding:0.45rem 0.8rem;color:#00d4c8;text-decoration:none;
-           font-size:0.68rem;letter-spacing:1px;text-transform:uppercase;font-weight:600;">
-           🌐 Vacaturesite</a>""", unsafe_allow_html=True)
-    st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
 render_nav()
 
 # ════════════════════════════════════════════════════════════════
-# SCREEN CONTENT — fragment so data doesn't reload on nav click
+# SCREEN CONTENT
 # ════════════════════════════════════════════════════════════════
 @st.fragment
 def render_screen():
     scr = st.session_state["screen"]
 
-    # ── SCREEN 0 — OMZET ──
+    # ── SCREEN 0 — OMZET ──────────────────────────────────────────────────────
     if scr == 0:
+        # 3 KPI boxes + donut
         k1,k2,k3 = st.columns(3)
+
         with k1:
+            dc = "#00e5a0" if days_rem <= 5 else "#f5a623" if days_rem <= 10 else "#00d4c8"
             st.markdown(f"""<div class="card"><div class="card-top"></div>
-                <div class="card-label">Maandomzet {CURRENT_MONTH}</div>
-                <div class="card-val pink">€{tot:,.0f}</div>
-                <div class="card-sub">doel €{COMPANY_TARGET:,.0f} · nog €{rem:,.0f}</div>
-                <div class="prog"><div class="prog-fill" style="width:{pct:.1f}%"></div></div>
+                <div class="card-label">Dagen resterend</div>
+                <div class="card-val" style="color:{dc}">{days_rem}</div>
+                <div class="card-sub">van de {days_in_month()} dagen in {CURRENT_MONTH}</div>
             </div>""", unsafe_allow_html=True)
+
         with k2:
             st.markdown(f"""<div class="card"><div class="card-top"></div>
-                <div class="card-label">Top Recruiter</div>
-                <div class="card-val teal" style="font-size:1.9rem;padding-top:0.3rem">{top_c}</div>
-                <div class="card-sub">€{top_v:,.0f} deze maand</div>
+                <div class="card-label">Open Vacatures</div>
+                <div class="card-val teal">{open_vac_count}</div>
+                <div class="card-sub">actief uitstaand</div>
             </div>""", unsafe_allow_html=True)
+
         with k3:
-            clr = "green" if pct>=100 else "pink"
+            if forecast and forecast > 0:
+                fc_pct = min(forecast / COMPANY_TARGET * 100, 150)
+                fc_clr = "#00e5a0" if fc_pct >= 100 else "#f5a623" if fc_pct >= 80 else "#e92076"
+                fc_txt = f"€{forecast:,.0f}"
+                fc_sub = f"{fc_pct:.0f}% van target · gebaseerd op historisch dagpatroon"
+            else:
+                fc_clr = "rgba(255,255,255,0.3)"
+                fc_txt = "—"
+                fc_sub = "onvoldoende historische data"
             st.markdown(f"""<div class="card"><div class="card-top"></div>
-                <div class="card-label">Target Voortgang</div>
-                <div class="card-val {clr}">{pct:.0f}%</div>
-                <div class="card-sub">van €{COMPANY_TARGET:,.0f} maandtarget</div>
+                <div class="card-label">Omzetverwachting maand</div>
+                <div class="card-val" style="color:{fc_clr};font-size:2.2rem">{fc_txt}</div>
+                <div class="card-sub">{fc_sub}</div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-        cd,cb = st.columns([1,2.2])
 
+        # Donut + bar chart
+        cd,cb = st.columns([1, 2.2])
         with cd:
-            fig = go.Figure(go.Pie(values=[tot,rem], labels=["Behaald","Resterend"],
+            fig = go.Figure(go.Pie(
+                values=[tot, rem], labels=["Behaald","Resterend"],
                 hole=0.8, sort=False, textinfo="none",
                 marker_colors=["#e92076","rgba(255,255,255,0.04)"],
                 marker=dict(line=dict(width=0))))
             fig.add_annotation(text=f"<b>{pct:.0f}%</b>", x=0.5, y=0.58,
-                font=dict(size=60,color="#e92076",family="Syne"), showarrow=False)
+                font=dict(size=60, color="#e92076", family="Syne"), showarrow=False)
             fig.add_annotation(text=f"€{tot:,.0f}", x=0.5, y=0.40,
-                font=dict(size=17,color="rgba(255,255,255,0.65)"), showarrow=False)
+                font=dict(size=17, color="rgba(255,255,255,0.65)"), showarrow=False)
             fig.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}", x=0.5, y=0.27,
-                font=dict(size=11,color="rgba(255,255,255,0.25)"), showarrow=False)
+                font=dict(size=11, color="rgba(255,255,255,0.25)"), showarrow=False)
             fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 showlegend=False, margin=dict(l=10,r=10,t=10,b=10), height=360)
             st.plotly_chart(fig, use_container_width=True)
@@ -394,17 +557,17 @@ def render_screen():
                     if k.split()[-1] == last: return v
                 return DEFAULT_TARGET
             rc = excl.groupby("consultant")["revenue"].sum().reset_index()
-            rc["t"]   = rc["consultant"].apply(get_t)
-            rc["p"]   = (rc["revenue"]/rc["t"]*100).round(1)
-            rc["r"]   = (rc["t"]-rc["revenue"]).clip(lower=0)
+            rc["t"] = rc["consultant"].apply(get_t)
+            rc["p"] = (rc["revenue"]/rc["t"]*100).round(1)
+            rc["r"] = (rc["t"]-rc["revenue"]).clip(lower=0)
             rc = rc.sort_values("revenue", ascending=True)
-            rc["c"]   = rc["p"].apply(lambda x:"#00e5a0" if x>=100 else("#f5a623" if x>=80 else"#e92076"))
+            rc["c"] = rc["p"].apply(lambda x:"#00e5a0" if x>=100 else("#f5a623" if x>=80 else"#e92076"))
             fig2 = go.Figure()
             fig2.add_trace(go.Bar(x=rc["revenue"], y=rc["consultant"], orientation="h", name="Behaald",
                 marker_color=rc["c"], marker_line_width=0,
-                text=rc.apply(lambda r:f"  €{r['revenue']:,.0f}  ·  {r['p']:.0f}%",axis=1),
+                text=rc.apply(lambda r:f"  €{r['revenue']:,.0f}  ·  {r['p']:.0f}%", axis=1),
                 textposition="inside", insidetextanchor="start",
-                textfont=dict(color="white",size=12,family="Inter")))
+                textfont=dict(color="white", size=12, family="Inter")))
             fig2.add_trace(go.Bar(x=rc["r"], y=rc["consultant"], orientation="h", name="Resterend",
                 marker_color="rgba(255,255,255,0.03)",
                 marker_line_color="rgba(255,255,255,0.06)", marker_line_width=1))
@@ -417,7 +580,7 @@ def render_screen():
                 margin=dict(l=0,r=10,t=30,b=0), height=360, bargap=0.2)
             st.plotly_chart(fig2, use_container_width=True)
 
-    # ── SCREEN 1 — PIPELINE ──
+    # ── SCREEN 1 — PIPELINE ───────────────────────────────────────────────────
     elif scr == 1:
         kpis = [
             ("Nieuwe Vacatures", stats["nieuwe_vacatures"], "#00d4c8"),
@@ -467,7 +630,7 @@ def render_screen():
                 <div class="prog"><div class="prog-fill" style="width:{pct:.1f}%"></div></div>
             </div>""", unsafe_allow_html=True)
 
-    # ── SCREEN 2 — TOP VACATURES ──
+    # ── SCREEN 2 — VACATURES ──────────────────────────────────────────────────
     elif scr == 2:
         if not vacs:
             st.info("Geen vacatures.")
@@ -509,10 +672,14 @@ def render_screen():
                 b1,b2,_ = st.columns([1,1,4])
                 with b1:
                     if st.button("← Vorige", key="vp"):
-                        st.session_state["vac_idx"] = (idx-1) % len(vacs); st.rerun(scope="fragment")
+                        st.session_state["vac_idx"] = (idx-1) % len(vacs)
+                        st.session_state["vac_ts"] = _time.time()
+                        st.rerun(scope="fragment")
                 with b2:
                     if st.button("Volgende →", key="vn"):
-                        st.session_state["vac_idx"] = (idx+1) % len(vacs); st.rerun(scope="fragment")
+                        st.session_state["vac_idx"] = (idx+1) % len(vacs)
+                        st.session_state["vac_ts"] = _time.time()
+                        st.rerun(scope="fragment")
             with cl:
                 st.markdown('<div style="font-size:0.55rem;color:rgba(255,255,255,0.2);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.8rem;padding-left:0.5rem">Recente vacatures</div>', unsafe_allow_html=True)
                 for i,vv in enumerate(vacs):
@@ -523,57 +690,9 @@ def render_screen():
 
 render_screen()
 
-# ── Live clock — uses parent DOM access via postMessage trick ─────────────────
-components.html("""
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:transparent; overflow:hidden; }
-#clkwrap {
-    position:fixed; top:1.8rem; right:2.5rem;
-    text-align:right; z-index:9999;
-    font-family:'Syne','Arial Black',sans-serif;
-}
-#clk {
-    font-size:3.2rem; font-weight:800; color:#e92076;
-    line-height:1; letter-spacing:-2px;
-    text-shadow: 0 0 40px rgba(233,32,118,0.4);
-}
-#clkd {
-    font-size:0.6rem; color:rgba(255,255,255,0.25);
-    letter-spacing:3px; text-transform:uppercase; margin-top:3px;
-    font-family:'Inter','Arial',sans-serif; font-weight:500;
-}
-</style>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&family=Inter:wght@500&display=swap" rel="stylesheet">
-</head>
-<body>
-<div id="clkwrap">
-    <div id="clk">--:--:--</div>
-    <div id="clkd">--</div>
-</div>
-<script>
-var NL_D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
-var NL_M=['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
-function getNL(){ return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"})); }
-function tick(){
-    var n=getNL();
-    var c=('0'+n.getHours()).slice(-2)+':'+('0'+n.getMinutes()).slice(-2)+':'+('0'+n.getSeconds()).slice(-2);
-    var d=NL_D[n.getDay()]+' '+n.getDate()+' '+NL_M[n.getMonth()]+' '+n.getFullYear();
-    document.getElementById('clk').textContent=c;
-    document.getElementById('clkd').textContent=d.toUpperCase();
-}
-tick(); setInterval(tick,1000);
-</script>
-</body>
-</html>
-""", height=90, scrolling=False)
-
 st.markdown("""
 <div style="text-align:center;padding:1rem 0 0.3rem;color:rgba(255,255,255,0.06);font-size:0.55rem;letter-spacing:3px;text-transform:uppercase">
-    Data gecached · vernieuwd elke 2 uur
+    Data gecached · vernieuwd elke 2 uur · pagina herlaadt automatisch
 </div>
 </div>
 """, unsafe_allow_html=True)
