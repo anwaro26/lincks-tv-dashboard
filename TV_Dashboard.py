@@ -195,15 +195,17 @@ def compute_forecast(inv_raw, current_tot):
         else: return None
         raw = round(current_tot/wf) if wf>0.01 else None
         if raw is None: return None
-        # Cap: forecast can't be less than current, or more than 3x current
-        raw = max(raw, current_tot)
-        raw = min(raw, current_tot * 3)
-        # On last few days, forecast = current (no room to grow much)
         days_left = days_remaining()
         tot_d = total_days()
-        if days_left <= 2:
-            return round(current_tot * 1.02)
-        return raw
+        day_today = nl_now().day
+        # On last 3 days: barely any room left
+        if days_left <= 3:
+            return round(current_tot * (1 + 0.005 * days_left))
+        # Cap forecast: can't be more than current + (remaining_days/total_days * company_target * 1.5)
+        max_possible = current_tot + (days_left / tot_d) * COMPANY_TARGET * 1.5
+        raw = max(raw, current_tot)
+        raw = min(raw, max_possible)
+        return round(raw)
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
 
@@ -321,48 +323,48 @@ def load_invoice_df():
                 "date":date,"month":month})
     return pd.DataFrame(rows), forecast, daily_days, daily_rev
 
+def classify_match_stage(row):
+    """Classify match into funnel stage — same logic as internal dashboard."""
+    sn = str(row.get("status_display") or row.get("status_name") or "").strip()
+    if row.get("has_job") or row.get("is_successfully_filled"): return "5. Geplaatst"
+    if any(sn.startswith(x) for x in ["5.1","5.2","5.3","5.4","5.5","5.6"]): return "5. Geplaatst"
+    if any(sn.startswith(x) for x in ["5.0","6.6","6.7"]): return "4. Aanbod"
+    if any(sn.startswith(x) for x in ["3.","4.","6.3","6.4","6.5","6.8","6.9"]): return "3. 1e gesprek klant"
+    return "2. Op gesprek"
+
+STAGE_RANK = {"2. Op gesprek":1,"3. 1e gesprek klant":2,"4. Aanbod":3,"5. Geplaatst":4}
+
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_pipeline():
-    """Load pipeline from matches parquet — fast, no API calls needed."""
-    s={"eerste_gesprek":0,"tweede_gesprek":0,"aanbod":0,"geplaatst":0,
-       "voorgesteld":0,"avg_ttf":None,"avg_tth":None}
+    """Load pipeline from matches parquet using proven stage classification."""
+    s={"op_gesprek":0,"eerste_gesprek":0,"aanbod":0,"geplaatst":0,"avg_ttf":None,"avg_tth":None}
     try:
-        # Load matches parquet
         matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
         matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
         matches["month"] = matches["creation_date"].dt.strftime("%Y-%m")
         cur_m = matches[matches["month"] == CURRENT_MONTH].copy()
 
         if not cur_m.empty:
-            for _, row in cur_m.iterrows():
-                sn = str(row.get("status_display") or row.get("status_name") or "")
-                # Voorgesteld = any active stage (not final rejected)
-                if not row.get("is_final", False):
-                    s["voorgesteld"] += 1
-                # 1e gesprek klant = stages 4.x
-                if any(f"4.{x}" in sn for x in ["1","2","3","4","5"]):
-                    s["eerste_gesprek"] += 1
-                # 2e gesprek = 4.2+
-                if any(f"4.{x}" in sn for x in ["2","3","4","5"]) or "2e gesprek" in sn.lower():
-                    s["tweede_gesprek"] += 1
-                # Aanbod = 5.x
-                if sn.startswith("5.") or "aanbod" in sn.lower():
-                    s["aanbod"] += 1
-                # Geplaatst
-                if row.get("is_successfully_filled") or row.get("has_job"):
-                    s["geplaatst"] += 1
+            # Per candidate take highest stage reached
+            cur_m["stage"] = cur_m.apply(classify_match_stage, axis=1)
+            cur_m["stage_rank"] = cur_m["stage"].map(STAGE_RANK).fillna(0).astype(int)
+            # Best stage per candidate
+            best = cur_m.loc[cur_m.groupby("candidate_id")["stage_rank"].idxmax()]
+            stage_counts = best["stage"].value_counts()
+            s["op_gesprek"]    = int(stage_counts.get("2. Op gesprek", 0))
+            s["eerste_gesprek"]= int(stage_counts.get("3. 1e gesprek klant", 0))
+            s["aanbod"]        = int(stage_counts.get("4. Aanbod", 0))
+            s["geplaatst"]     = int(stage_counts.get("5. Geplaatst", 0))
 
-        # Placements for geplaatst count + TTF/TTH
+        # Placements parquet for geplaatst + TTF/TTH (more reliable)
         pl = pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
-        pl["creation_date"] = pd.to_datetime(pl.get("creation_date",""), errors="coerce")
-        pl["vacancy_created"] = pd.to_datetime(pl.get("vacancy_created",""), errors="coerce")
-        pl["match_created"] = pd.to_datetime(pl.get("match_created",""), errors="coerce")
+        pl["creation_date"]  = pd.to_datetime(pl.get("creation_date",""), errors="coerce")
+        pl["vacancy_created"]= pd.to_datetime(pl.get("vacancy_created",""), errors="coerce")
+        pl["match_created"]  = pd.to_datetime(pl.get("match_created",""), errors="coerce")
         pl["month"] = pl["creation_date"].dt.strftime("%Y-%m")
         cur_pl = pl[pl["month"] == CURRENT_MONTH].copy()
-
-        # Use placements count as geplaatst (more reliable)
         if not cur_pl.empty:
-            s["geplaatst"] = len(cur_pl)
+            s["geplaatst"] = max(s["geplaatst"], len(cur_pl))
             ttf = (cur_pl["creation_date"]-cur_pl["vacancy_created"]).dt.days.dropna()
             tth = (cur_pl["creation_date"]-cur_pl["match_created"]).dt.days.dropna()
             ttf = ttf[(ttf>0)&(ttf<500)]
@@ -370,71 +372,43 @@ def load_pipeline():
             if not ttf.empty: s["avg_ttf"] = round(ttf.mean())
             if not tth.empty: s["avg_tth"] = round(tth.mean())
 
-        # If matches parquet is empty for current month, try API
-        if s["voorgesteld"] == 0 and CLIENT_SECRET:
-            ms = f"{CURRENT_MONTH}-01"
-            q2 = f"""{{ crJobPage(qualifier:"creationDate > (NSCalendarDate) '{ms} 00:00:00'",
-                pageable:{{page:0,size:1}}){{ totalElements }} }}"""
-            s["geplaatst"] = max(s["geplaatst"],
-                (run_query(q2).get("data",{}).get("crJobPage") or {}).get("totalElements",0))
-
     except Exception as e: print(f"[PIPELINE] {e}")
     return s
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_vacancies():
-    """Paginate backwards from last page to find recent active vacancies fast."""
-    # First get total
-    probe = run_query("{ crVacancyPage(pageable:{page:0,size:1}){ totalElements } }")
-    total = (probe.get("data",{}).get("crVacancyPage") or {}).get("totalElements", 0)
-    if not total: return [], 0
-
-    page_size = 100
-    last_page = (total - 1) // page_size
-    result = []
-    # Search backwards from most recent pages
-    for pn in range(last_page, max(-1, last_page - 30), -1):
-        q=f"""{{ crVacancyPage(pageable:{{page:{pn},size:{page_size}}}){{
-            totalElements items{{
-                _id jobTitle vacancyNo creationDate statusDisplay
-                toCompany{{name}} owner{{firstName lastName}} agency{{name}}
-                workLocation rawWorkLocation toFunctionLevel1{{label}}
-                jobDescription
-            }}
-        }} }}"""
-        data=run_query(q)
-        if not data or not data.get("data"): break
-        items=(data.get("data",{}).get("crVacancyPage") or {}).get("items",[])
-        if not items: break
-        for v in items:
-            if v.get("statusDisplay") in ACTIVE_STATUSES                and v.get("jobTitle") and v.get("jobTitle") not in ("--","None"):
-                result.append(v)
-        if len(result) >= 10: break
-        _time.sleep(0.2)
-
-    # Also check first few pages for active ones
-    if len(result) < 10:
-        for pn in range(min(5, last_page)):
-            q=f"""{{ crVacancyPage(pageable:{{page:{pn},size:{page_size}}}){{
-                items{{
-                    _id jobTitle vacancyNo creationDate statusDisplay
-                    toCompany{{name}} owner{{firstName lastName}} agency{{name}}
-                    workLocation rawWorkLocation toFunctionLevel1{{label}}
-                    jobDescription
-                }}
-            }} }}"""
-            data=run_query(q)
-            if not data or not data.get("data"): break
-            items=(data.get("data",{}).get("crVacancyPage") or {}).get("items",[])
-            for v in items:
-                if v.get("statusDisplay") in ACTIVE_STATUSES                    and v.get("jobTitle") and v.get("jobTitle") not in ("--","None"):
-                    if not any(x["_id"]==v["_id"] for x in result):
-                        result.append(v)
-            _time.sleep(0.2)
-
-    total_count = len(result)
-    result.sort(key=lambda x:x.get("creationDate",""), reverse=True)
-    return result[:10], total_count
+    """Load active vacancies from vacancies parquet (already has status field)."""
+    try:
+        vac_raw = pd.read_parquet(os.path.join(DATA_DIR,"vacancies.parquet"))
+        # Filter to active statuses
+        active = vac_raw[vac_raw["status"].isin(ACTIVE_STATUSES)].copy()
+        active = active[active["job_title"].notna() & ~active["job_title"].isin(["--","None",""])]
+        total_count = len(active)
+        # Sort by creation date desc, take top 10
+        active = active.sort_values("creation_date", ascending=False).head(10)
+        # Convert to dict format matching API structure
+        result = []
+        for _, v in active.iterrows():
+            owner_parts = str(v.get("owner","")).split(" ")
+            result.append({
+                "_id": str(v.get("vacancy_id","")),
+                "jobTitle": str(v.get("job_title","")),
+                "vacancyNo": str(v.get("vacancy_no","")),
+                "creationDate": str(v.get("creation_date","")),
+                "statusDisplay": str(v.get("status","")),
+                "toCompany": {"name": str(v.get("company","—"))},
+                "owner": {"firstName": owner_parts[0] if owner_parts else "",
+                          "lastName": " ".join(owner_parts[1:]) if len(owner_parts)>1 else ""},
+                "agency": {"name": str(v.get("agency","—"))},
+                "workLocation": None,
+                "rawWorkLocation": None,
+                "toFunctionLevel1": None,
+                "jobDescription": None,
+            })
+        return result, total_count
+    except Exception as e:
+        print(f"[VACANCIES] parquet failed: {e}")
+        return [], 0
 
 # ── Load all ──────────────────────────────────────────────────────────────────
 with st.spinner(""):
@@ -543,7 +517,7 @@ def render_nav():
             st.session_state.update({"screen":1,"locked":False,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n3:
-        if st.button("★  Vacatures  (vergrendelt scherm)", key="b2"):
+        if st.button("★  Vacatures", key="b2"):
             st.session_state.update({"screen":2,"locked":True,"vac_idx":0,"vac_ts":_time.time()})
             st.rerun(scope="app")
     st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
@@ -609,7 +583,7 @@ def render_screen():
             fig.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}",x=0.5,y=0.27,
                 font=dict(size=10,color="rgba(255,255,255,0.22)"),showarrow=False)
             fig.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
-                showlegend=False,margin=dict(l=10,r=10,t=10,b=10),height=300)
+                showlegend=False,margin=dict(l=10,r=10,t=10,b=10),height=220)
             st.plotly_chart(fig,use_container_width=True)
 
         with cb:
@@ -727,13 +701,12 @@ def render_screen():
         tth=f"{p['avg_tth']} dgn" if p['avg_tth'] else "—"
 
         kpis=[
-            ("Voorgesteld",     p["voorgesteld"],    "#00d4c8"),
-            ("1e Gesprek Klant",p["eerste_gesprek"], "#e92076"),
-            ("2e Gesprek Klant",p["tweede_gesprek"],  "#f5a623"),
-            ("Heeft Aanbod",    p["aanbod"],          "#a78bfa"),
-            ("Geplaatst ✓",     p["geplaatst"],       "#00e5a0"),
+            ("Op Gesprek",      p["op_gesprek"],      "#00d4c8"),
+            ("1e Gesprek Klant",p["eerste_gesprek"],  "#e92076"),
+            ("Heeft Aanbod",    p["aanbod"],           "#a78bfa"),
+            ("Geplaatst ✓",     p["geplaatst"],        "#00e5a0"),
         ]
-        cols=st.columns(5)
+        cols=st.columns(4)
         for col,(lbl,val,clr) in zip(cols,kpis):
             with col:
                 st.markdown(f"""<div class="fkpi">
@@ -745,9 +718,9 @@ def render_screen():
 
         cf,ct=st.columns([1.4,1])
         with cf:
-            lbls=["Voorgesteld","1e Gesprek","2e Gesprek","Aanbod","Geplaatst"]
-            vals=[p["voorgesteld"],p["eerste_gesprek"],p["tweede_gesprek"],p["aanbod"],p["geplaatst"]]
-            clrs=["#00d4c8","#e92076","#f5a623","#a78bfa","#00e5a0"]
+            lbls=["Op Gesprek","1e Gesprek Klant","Aanbod","Geplaatst"]
+            vals=[p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
+            clrs=["#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
                 connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
