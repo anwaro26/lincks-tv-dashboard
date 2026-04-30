@@ -6,6 +6,7 @@ import time as _time
 from datetime import datetime, timedelta
 import requests
 import base64
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="Lincks Performance",
@@ -62,8 +63,9 @@ section[data-testid="stSidebar"]{display:none!important;}
 .vac-sm-t{font-size:0.85rem;font-weight:600;color:white;margin-bottom:0.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .vac-sm-c{font-size:0.68rem;color:rgba(255,255,255,0.3);}
 .stSelectbox>div>div{background:rgba(255,255,255,0.04)!important;border:1px solid rgba(255,255,255,0.08)!important;color:white!important;border-radius:8px!important;font-size:0.8rem!important;}
-.stButton>button{background:rgba(255,255,255,0.04)!important;color:rgba(255,255,255,0.45)!important;border:1px solid rgba(255,255,255,0.08)!important;border-radius:8px!important;font-size:0.7rem!important;letter-spacing:1.5px!important;text-transform:uppercase!important;font-weight:600!important;padding:0.45rem 1rem!important;}
+.stButton>button{background:rgba(255,255,255,0.04)!important;color:rgba(255,255,255,0.45)!important;border:1px solid rgba(255,255,255,0.08)!important;border-radius:8px!important;font-size:0.7rem!important;letter-spacing:1.5px!important;text-transform:uppercase!important;font-weight:600!important;padding:0.45rem 1rem!important;transition:all 0.15s!important;}
 .stButton>button:hover{background:rgba(233,32,118,0.15)!important;border-color:rgba(233,32,118,0.35)!important;color:white!important;}
+.stButton>button:active{background:#e92076!important;border-color:#e92076!important;color:white!important;}
 </style>
 <meta http-equiv="refresh" content="7200">
 """, unsafe_allow_html=True)
@@ -297,10 +299,7 @@ st.markdown(f"""
         {logo_html}
         <span class="hdr-badge">Live · {CURRENT_MONTH}</span>
     </div>
-    <div style="text-align:right">
-        <div class="clock" id="clk">--:--:--</div>
-        <div class="clock-date" id="clkd">--</div>
-    </div>
+    <div style="text-align:right;min-width:220px;min-height:80px"></div>
 </div>
 <div class="divider"></div>
 """, unsafe_allow_html=True)
@@ -524,25 +523,53 @@ def render_screen():
 
 render_screen()
 
-# ── Live clock JS — injected at bottom after DOM ready ────────────────────────
-st.markdown("""
+# ── Live clock — uses parent DOM access via postMessage trick ─────────────────
+components.html("""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:transparent; overflow:hidden; }
+#clkwrap {
+    position:fixed; top:1.8rem; right:2.5rem;
+    text-align:right; z-index:9999;
+    font-family:'Syne','Arial Black',sans-serif;
+}
+#clk {
+    font-size:3.2rem; font-weight:800; color:#e92076;
+    line-height:1; letter-spacing:-2px;
+    text-shadow: 0 0 40px rgba(233,32,118,0.4);
+}
+#clkd {
+    font-size:0.6rem; color:rgba(255,255,255,0.25);
+    letter-spacing:3px; text-transform:uppercase; margin-top:3px;
+    font-family:'Inter','Arial',sans-serif; font-weight:500;
+}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&family=Inter:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="clkwrap">
+    <div id="clk">--:--:--</div>
+    <div id="clkd">--</div>
+</div>
 <script>
-(function(){
-    var NL_D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
-    var NL_M=['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
-    function getNL(){ return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"})); }
-    function tick(){
-        var n=getNL();
-        var c=('0'+n.getHours()).slice(-2)+':'+('0'+n.getMinutes()).slice(-2)+':'+('0'+n.getSeconds()).slice(-2);
-        var d=NL_D[n.getDay()]+' '+n.getDate()+' '+NL_M[n.getMonth()]+' '+n.getFullYear();
-        var ce=document.getElementById('clk'); if(ce) ce.textContent=c;
-        var de=document.getElementById('clkd'); if(de) de.textContent=d.toUpperCase();
-    }
-    tick();
-    setInterval(tick,1000);
-})();
+var NL_D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
+var NL_M=['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+function getNL(){ return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"})); }
+function tick(){
+    var n=getNL();
+    var c=('0'+n.getHours()).slice(-2)+':'+('0'+n.getMinutes()).slice(-2)+':'+('0'+n.getSeconds()).slice(-2);
+    var d=NL_D[n.getDay()]+' '+n.getDate()+' '+NL_M[n.getMonth()]+' '+n.getFullYear();
+    document.getElementById('clk').textContent=c;
+    document.getElementById('clkd').textContent=d.toUpperCase();
+}
+tick(); setInterval(tick,1000);
 </script>
-""", unsafe_allow_html=True)
+</body>
+</html>
+""", height=90, scrolling=False)
 
 st.markdown("""
 <div style="text-align:center;padding:1rem 0 0.3rem;color:rgba(255,255,255,0.06);font-size:0.55rem;letter-spacing:3px;text-transform:uppercase">
