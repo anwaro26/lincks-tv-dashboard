@@ -78,24 +78,25 @@ section[data-testid="stSidebar"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── JS: clock only — NO auto reload ──────────────────────────────────────────
-st.markdown("""
+# JS injected after layout via component trick
+_JS = """
 <script>
-(function(){
+(function startClock(){
     const NL_D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
     const NL_M=['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
     function getNL(){ return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"})); }
-    function run(){
+    function tick(){
         const n=getNL();
         const c=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0')+':'+String(n.getSeconds()).padStart(2,'0');
         const d=NL_D[n.getDay()]+' '+n.getDate()+' '+NL_M[n.getMonth()]+' '+n.getFullYear();
         const ce=document.getElementById('clk'); if(ce) ce.textContent=c;
         const de=document.getElementById('clkd'); if(de) de.textContent=d.toUpperCase();
     }
-    run(); setInterval(run,1000);
+    tick(); setInterval(tick,1000);
 })();
 </script>
-""", unsafe_allow_html=True)
+"""
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CLIENT_ID     = "4db4f54a9c90230221da81f085ef3bd5.apps.carerix.io"
@@ -289,23 +290,11 @@ if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
 if "manual" not in st.session_state: st.session_state["manual"]=False
 if "vac_idx" not in st.session_state: st.session_state["vac_idx"]=0
 if "vac_ts" not in st.session_state: st.session_state["vac_ts"]=_time.time()
-if "last_reload" not in st.session_state: st.session_state["last_reload"]=_time.time()
 
-# Auto-switch screen 0↔1 every 60s (only if not manual)
+
 now_t=_time.time()
-if not st.session_state["manual"] and now_t-st.session_state["last_sw"]>60:
-    st.session_state["screen"]=1-st.session_state["screen"]
-    st.session_state["last_sw"]=now_t
 
-# Auto-advance carousel every 6s on screen 2
-if st.session_state["screen"]==2 and now_t-st.session_state["vac_ts"]>6:
-    st.session_state["vac_idx"]=(st.session_state["vac_idx"]+1)
-    st.session_state["vac_ts"]=now_t
-
-# Reload for auto-switch: only rerun every 6s max (not per interaction)
-if now_t-st.session_state["last_reload"]>6:
-    st.session_state["last_reload"]=now_t
-    st.rerun()
+# No auto-rerun — switching is manual only, carousel is JS-driven
 
 # ── Month & Logo ──────────────────────────────────────────────────────────────
 all_months=sorted(df["month"].unique().tolist(),reverse=True)
@@ -574,6 +563,12 @@ elif scr==2:
                 c2=(vv.get("toCompany") or {}).get("name","—")
                 cls2="vac-sm cur" if i==idx else "vac-sm"
                 st.markdown(f'<div class="{cls2}"><div class="vac-sm-t">{t2}</div><div class="vac-sm-c">🏢 {c2}</div></div>',unsafe_allow_html=True)
+
+# Inject JS at bottom so DOM is ready
+st.markdown(_JS, unsafe_allow_html=True)
+
+# Meta refresh every 30 min for data
+st.markdown('<meta http-equiv="refresh" content="1800">', unsafe_allow_html=True)
 
 # Footer
 lock_txt="📌 Vergrendeld · klik ander scherm" if st.session_state["manual"] else "↔ Wisselt automatisch elke 60s"
