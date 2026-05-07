@@ -426,14 +426,21 @@ def load_pipeline():
         matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
         matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
         matches["month"] = matches["creation_date"].dt.strftime("%Y-%m")
-        cur_m = matches[matches["month"] == CURRENT_MONTH].copy()
 
-        if not cur_m.empty:
+        # Stage funnel = active pipeline regardless of when the match was created.
+        # Use rolling 90-day window so old closed matches don't inflate counts.
+        cutoff = nl_now() - timedelta(days=90)
+        active_m = matches[matches["creation_date"] >= cutoff].copy()
+
+        # Fall back to previous month if current window is empty (parquet not yet synced)
+        if active_m.empty:
+            active_m = matches[matches["month"].isin([CURRENT_MONTH, PREV_MONTH])].copy()
+
+        if not active_m.empty:
             # Per candidate take highest stage reached
-            cur_m["stage"] = cur_m.apply(classify_match_stage, axis=1)
-            cur_m["stage_rank"] = cur_m["stage"].map(STAGE_RANK).fillna(0).astype(int)
-            # Best stage per candidate
-            best = cur_m.loc[cur_m.groupby("candidate_id")["stage_rank"].idxmax()]
+            active_m["stage"] = active_m.apply(classify_match_stage, axis=1)
+            active_m["stage_rank"] = active_m["stage"].map(STAGE_RANK).fillna(0).astype(int)
+            best = active_m.loc[active_m.groupby("candidate_id")["stage_rank"].idxmax()]
             stage_counts = best["stage"].value_counts()
             s["op_gesprek"]    = int(stage_counts.get("2. Op gesprek", 0))
             s["eerste_gesprek"]= int(stage_counts.get("3. 1e gesprek klant", 0))
