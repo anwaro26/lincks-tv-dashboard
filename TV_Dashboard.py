@@ -327,7 +327,8 @@ def load_invoice_df():
             total=(probe.get("data",{}).get("crInvoicePage") or {}).get("totalElements",0)
             if total:
                 lp=(total-1)//100
-                for pn in range(max(0,lp-1),lp+1):
+                # Fetch last 5 pages (500 invoices) to capture all recent months — same as Final dashboard
+                for pn in range(max(0,lp-4),lp+1):
                     q=f"""{{ crInvoicePage(pageable:{{page:{pn},size:100}}){{
                         items{{ _id invoiceID valueDate date total statusDisplay
                                companyName toCompany{{name}} toJob{{_id}}
@@ -471,42 +472,50 @@ def load_pipeline():
     except Exception as e: print(f"[PIPELINE] {e}")
     return s
 
+def fetch_vacancy_description(vacancy_id: str) -> str:
+    """Fetch intro + requirements text for a single vacancy from Carerix API."""
+    import re as _re
+    try:
+        q = f"""{{ crVacancy(_id: "{vacancy_id}") {{
+            introInformation additionalInformation requirements
+        }} }}"""
+        data = run_query(q)
+        v = (data.get("data") or {}).get("crVacancy") or {}
+        parts = [v.get("introInformation") or "", v.get("additionalInformation") or "", v.get("requirements") or ""]
+        text = " ".join(p for p in parts if p and str(p) not in ("None","null",""))
+        text = _re.sub(r'<[^>]+>', ' ', text)
+        text = _re.sub(r'\s+', ' ', text).strip()
+        return text[:250] + "…" if len(text) > 250 else text
+    except Exception as e:
+        print(f"[VAC_DESC] {vacancy_id}: {e}"); return ""
+
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_vacancies():
     """Load active vacancies — one per recruiter so the carousel shows variety."""
-    import re as _re
     try:
         vac_raw = pd.read_parquet(os.path.join(DATA_DIR,"vacancies.parquet"))
         active = vac_raw[vac_raw["status"].isin(ACTIVE_STATUSES)].copy()
         active = active[active["job_title"].notna() & ~active["job_title"].isin(["--","None","nan",""])]
         total_count = len(active)
 
-        # Sort newest first, then keep best (most recent) vacancy per recruiter
         # Exclude internal/backoffice accounts
         active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice", na=False)]
         active = active.sort_values("creation_date", ascending=False)
         active["_owner_key"] = active["owner"].astype(str).str.strip().str.lower()
         one_per = active.drop_duplicates(subset=["_owner_key"], keep="first")
-        # Also deduplicate on job_title within the selection so we don't repeat role names
         one_per = one_per.drop_duplicates(subset=["job_title"], keep="first")
         selection = one_per.head(10)
 
         result = []
         for _, v in selection.iterrows():
             owner_parts = str(v.get("owner","")).split(" ")
-            # Try to get intro text from parquet if column exists
-            intro_raw = ""
-            for col in ["intro", "intro_text", "job_description", "description", "introInformation"]:
-                val = v.get(col, "")
-                if val and str(val) not in ("None","nan","--",""):
-                    intro_raw = str(val); break
-            intro_clean = _re.sub(r'<[^>]+>', '', intro_raw).strip()
-            intro_clean = intro_clean[:200] + "…" if len(intro_clean) > 200 else intro_clean
-
+            vacancy_id  = str(v.get("vacancy_id",""))
+            # Fetch real description from Carerix API
+            intro_clean = fetch_vacancy_description(vacancy_id) if vacancy_id and CLIENT_SECRET else ""
             match_count = int(v.get("match_count", 0) or 0)
             agency      = str(v.get("agency",""))
             result.append({
-                "_id":          str(v.get("vacancy_id","")),
+                "_id":          vacancy_id,
                 "jobTitle":     str(v.get("job_title","")),
                 "vacancyNo":    str(v.get("vacancy_no","")),
                 "creationDate": str(v.get("creation_date","")),
