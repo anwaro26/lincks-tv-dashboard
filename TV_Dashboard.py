@@ -827,36 +827,35 @@ def render_screen():
 
         # Recruiter bar always shown below
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        rev_consultant = excl.groupby("consultant")["revenue"].sum().reset_index()
         def get_t(n):
             if n in TARGETS: return TARGETS[n]
             last=n.split()[-1] if n else ""
             for k,v in TARGETS.items():
                 if k.split()[-1]==last: return v
             return DEFAULT_TARGET
-        rc=excl.groupby("consultant")["revenue"].sum().reset_index()
-        rc["t"]=rc["consultant"].apply(get_t)
-        rc["p"]=(rc["revenue"]/rc["t"]*100).round(1)
-        rc["r"]=(rc["t"]-rc["revenue"]).clip(lower=0)
-        rc=rc.sort_values("revenue",ascending=True)
-        rc["c"]=rc["p"].apply(lambda x:"#00e5a0" if x>=100 else("#f5a623" if x>=80 else"#e92076"))
-        fig3=go.Figure()
-        fig3.add_trace(go.Bar(x=rc["revenue"],y=rc["consultant"],orientation="h",name="Behaald",
-            marker_color=rc["c"],marker_line_width=0,
-            text=rc.apply(lambda r:f"  €{r['revenue']:,.0f}  ·  {r['p']:.0f}%",axis=1),
-            textposition="inside",insidetextanchor="start",
-            textfont=dict(color="white",size=12,family="Inter")))
-        fig3.add_trace(go.Bar(x=rc["r"],y=rc["consultant"],orientation="h",name="Resterend",
-            marker_color="rgba(255,255,255,0.03)",
-            marker_line_color="rgba(255,255,255,0.06)",marker_line_width=1))
-        fig3.update_layout(barmode="stack",plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",font_color="rgba(255,255,255,0.4)",
-            xaxis=dict(gridcolor="rgba(255,255,255,0.04)",tickprefix="€",
-                tickfont=dict(size=10),zeroline=False),
-            yaxis=dict(tickfont=dict(size=13,family="Inter"),gridcolor="rgba(0,0,0,0)"),
-            legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1,
-                font=dict(color="rgba(255,255,255,0.3)",size=10)),
-            margin=dict(l=0,r=10,t=30,b=0),height=280,bargap=0.2)
-        st.plotly_chart(fig3,use_container_width=True)
+        rev_consultant["target"]    = rev_consultant["consultant"].apply(get_t)
+        rev_consultant["pct"]       = (rev_consultant["revenue"] / rev_consultant["target"] * 100).round(1)
+        rev_consultant              = rev_consultant.sort_values("revenue", ascending=True)
+        rev_consultant["color"]     = rev_consultant["pct"].apply(lambda x: "#63ccca" if x >= 100 else ("#f5a623" if x >= 80 else "#e92076"))
+        rev_consultant["resterend"] = (rev_consultant["target"] - rev_consultant["revenue"]).clip(lower=0)
+        fig3 = go.Figure()
+        fig3.add_trace(go.Bar(x=rev_consultant["revenue"], y=rev_consultant["consultant"], orientation="h", name="Behaald",
+            marker_color=rev_consultant["color"], marker_line_width=0,
+            text=rev_consultant.apply(lambda r: f"€{r['revenue']:,.0f}  ({r['pct']:.0f}%)", axis=1),
+            textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=12, family="Inter"),
+            customdata=rev_consultant[["target", "pct"]].values,
+            hovertemplate="<b>%{y}</b><br>Behaald: €%{x:,.0f}<br>Target: €%{customdata[0]:,.0f}<br>%{customdata[1]:.0f}% van target<extra></extra>"))
+        fig3.add_trace(go.Bar(x=rev_consultant["resterend"], y=rev_consultant["consultant"], orientation="h", name="Resterend",
+            marker_color="rgba(255,255,255,0.08)", marker_line_color="rgba(255,255,255,0.15)", marker_line_width=1,
+            hovertemplate="<b>%{y}</b><br>Nog te gaan: €%{x:,.0f}<extra></extra>"))
+        fig3.update_layout(barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font_color="rgba(255,255,255,0.5)",
+            xaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickprefix="€", tickfont=dict(size=10), zeroline=False),
+            yaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickfont=dict(size=13, family="Inter")),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="white")),
+            margin=dict(l=0, r=0, t=30, b=0), height=380, bargap=0.2)
+        st.plotly_chart(fig3, use_container_width=True)
 
     # ── PIPELINE ─────────────────────────────────────────────────────────────
     elif scr==1:
