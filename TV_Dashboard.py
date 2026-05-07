@@ -472,33 +472,45 @@ def load_pipeline():
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_vacancies():
-    """Load active vacancies from vacancies parquet (already has status field)."""
+    """Load active vacancies — one per recruiter so the carousel shows variety."""
+    import re as _re
     try:
         vac_raw = pd.read_parquet(os.path.join(DATA_DIR,"vacancies.parquet"))
-        # Filter to active statuses
         active = vac_raw[vac_raw["status"].isin(ACTIVE_STATUSES)].copy()
-        active = active[active["job_title"].notna() & ~active["job_title"].isin(["--","None",""])]
+        active = active[active["job_title"].notna() & ~active["job_title"].isin(["--","None","nan",""])]
         total_count = len(active)
-        # Sort by creation date desc, take top 10
-        active = active.sort_values("creation_date", ascending=False).head(10)
-        # Convert to dict format matching API structure
+
+        # Sort newest first, then keep best (most recent) vacancy per recruiter
+        active = active.sort_values("creation_date", ascending=False)
+        active["_owner_key"] = active["owner"].astype(str).str.strip().str.lower()
+        one_per = active.drop_duplicates(subset=["_owner_key"], keep="first")
+        # Also deduplicate on job_title within the selection so we don't repeat role names
+        one_per = one_per.drop_duplicates(subset=["job_title"], keep="first")
+        selection = one_per.head(10)
+
         result = []
-        for _, v in active.iterrows():
+        for _, v in selection.iterrows():
             owner_parts = str(v.get("owner","")).split(" ")
+            # Try to get intro text from parquet if column exists
+            intro_raw = ""
+            for col in ["intro", "intro_text", "job_description", "description", "introInformation"]:
+                val = v.get(col, "")
+                if val and str(val) not in ("None","nan","--",""):
+                    intro_raw = str(val); break
+            intro_clean = _re.sub(r'<[^>]+>', '', intro_raw).strip()
+            intro_clean = intro_clean[:200] + "…" if len(intro_clean) > 200 else intro_clean
+
             result.append({
-                "_id": str(v.get("vacancy_id","")),
-                "jobTitle": str(v.get("job_title","")),
-                "vacancyNo": str(v.get("vacancy_no","")),
+                "_id":          str(v.get("vacancy_id","")),
+                "jobTitle":     str(v.get("job_title","")),
+                "vacancyNo":    str(v.get("vacancy_no","")),
                 "creationDate": str(v.get("creation_date","")),
-                "statusDisplay": str(v.get("status","")),
-                "toCompany": {"name": str(v.get("company","—"))},
-                "owner": {"firstName": owner_parts[0] if owner_parts else "",
-                          "lastName": " ".join(owner_parts[1:]) if len(owner_parts)>1 else ""},
-                "agency": {"name": str(v.get("agency","—"))},
-                "workLocation": None,
-                "rawWorkLocation": None,
-                "toFunctionLevel1": None,
-                "jobDescription": None,
+                "statusDisplay":str(v.get("status","")),
+                "toCompany":    {"name": str(v.get("company","—"))},
+                "owner":        {"firstName": owner_parts[0] if owner_parts else "",
+                                 "lastName":  " ".join(owner_parts[1:]) if len(owner_parts)>1 else ""},
+                "workLocation": str(v.get("work_location", v.get("workLocation",""))),
+                "intro":        intro_clean,
             })
         return result, total_count
     except Exception as e:
@@ -550,7 +562,7 @@ st_autorefresh(interval=10_000, limit=None, key="tv_autorefresh")
 
 now_t=_time.time()
 if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
-    st.session_state["screen"]=1-st.session_state["screen"]
+    st.session_state["screen"]=(st.session_state["screen"]+1)%3
     st.session_state["last_sw"]=now_t
 if st.session_state["screen"]==2 and now_t-st.session_state["vac_ts"]>6:
     st.session_state["vac_idx"]=(st.session_state["vac_idx"]+1)
@@ -889,45 +901,74 @@ def render_screen():
         else:
             idx=st.session_state["vac_idx"]%len(vacs)
             v=vacs[idx]
-            title=v.get("jobTitle","—")
-            company=(v.get("toCompany") or {}).get("name","—")
-            ow=v.get("owner") or {}
-            cons=f"{ow.get('firstName','')} {ow.get('lastName','')}".strip() or "—"
-            ag=(v.get("agency") or {}).get("name","—")
-            created=pd.to_datetime(v.get("creationDate")) if v.get("creationDate") else None
-            days_open=(nl_now()-created.replace(tzinfo=None)).days if created else 0
-            loc=v.get("workLocation") or v.get("rawWorkLocation") or ""
-            func=(v.get("toFunctionLevel1") or {}).get("label","")
-            vno=v.get("vacancyNo","")
-            status=v.get("statusDisplay","")
-            desc=v.get("jobDescription") or ""
-            # Strip HTML tags from description
-            import re
-            desc=re.sub(r'<[^>]+>','',desc).strip()
-            desc=desc[:180]+"…" if len(desc)>180 else desc
+            title    = v.get("jobTitle","—")
+            company  = (v.get("toCompany") or {}).get("name","—")
+            ow       = v.get("owner") or {}
+            cons     = f"{ow.get('firstName','')} {ow.get('lastName','')}".strip() or "—"
+            created  = pd.to_datetime(v.get("creationDate")) if v.get("creationDate") else None
+            days_open= (nl_now()-created.replace(tzinfo=None)).days if created else 0
+            loc      = v.get("workLocation","") or ""
+            if loc in ("None","nan"): loc=""
+            vno      = v.get("vacancyNo","")
+            status   = v.get("statusDisplay","")
+            intro    = v.get("intro","") or ""
+
+            # Build a clean summary if no intro available
+            if not intro:
+                intro = f"Wij zijn op zoek naar een {title} voor {company}."
+                if loc: intro += f" Standplaats: {loc}."
 
             pills=""
-            if func and func!="Dossier": pills+=f'<span class="pill acc">{func}</span>'
             if loc: pills+=f'<span class="pill">📍 {loc}</span>'
-            if status: pills+=f'<span class="pill">{status}</span>'
             days_c="#e92076" if days_open>60 else "#f5a623" if days_open>30 else "#00d4c8"
             pills+=f'<span class="pill" style="color:{days_c};border-color:rgba(255,255,255,0.12)">⏱ {days_open} dagen open</span>'
+            if status: pills+=f'<span class="pill">{status}</span>'
 
             dots="".join([f'<div class="dot {"on" if i==idx else ""}"></div>' for i in range(len(vacs))])
 
-            # Counter
-            st.markdown(f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.8rem">{idx+1} / {len(vacs)} actieve vacatures · {open_vac_count} totaal</div>', unsafe_allow_html=True)
+            # Top row: big total count card + progress indicator
+            ch,_sp=st.columns([1,3])
+            with ch:
+                st.markdown(f"""
+                <a href="https://www.lincks.nl/vacatures" target="_blank" style="text-decoration:none;">
+                  <div style="background:linear-gradient(135deg,rgba(233,32,118,0.15),rgba(0,212,200,0.08));
+                    border:1px solid rgba(233,32,118,0.3);border-radius:14px;padding:0.9rem 1.4rem;
+                    cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:1rem;">
+                    <div>
+                      <div style="font-family:Syne,sans-serif;font-size:2.6rem;font-weight:800;
+                        color:#e92076;line-height:1;">{open_vac_count}</div>
+                      <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:3px;
+                        text-transform:uppercase;margin-top:0.3rem;">open vacatures</div>
+                    </div>
+                    <div style="font-size:0.7rem;color:rgba(255,255,255,0.2);margin-left:auto;">
+                      lincks.nl/vacatures ↗
+                    </div>
+                  </div>
+                </a>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
             cm,cl=st.columns([1.7,1])
             with cm:
                 st.markdown(f"""
                 <div class="vac-big">
-                    <div class="vac-num">Vacature {vno}</div>
-                    <div class="vac-title">{title}</div>
-                    <div class="vac-company">🏢 {company}</div>
-                    <div class="pills">{pills}</div>
-                    {"<div class='vac-desc'>"+desc+"</div>" if desc else ""}
-                    <div class="vac-recruiter">👤 Recruiter: {cons} · {ag}</div>
+                  <div class="vac-num">{idx+1} van {len(vacs)} · vacature {vno}</div>
+                  <div class="vac-title">{title}</div>
+                  <div class="vac-company">🏢 {company}</div>
+                  <div class="pills">{pills}</div>
+                  <div style="margin:0.8rem 0 1rem;padding:0.8rem 1rem;
+                    background:rgba(255,255,255,0.03);border-radius:10px;
+                    border-left:2px solid rgba(0,212,200,0.35);">
+                    <div style="font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:2px;
+                      text-transform:uppercase;margin-bottom:0.4rem;">Recruiter</div>
+                    <div style="font-size:1rem;font-weight:600;color:white;margin-bottom:0.5rem;">
+                      👤 {cons}
+                    </div>
+                    <div style="font-size:0.82rem;color:rgba(255,255,255,0.45);line-height:1.6;">
+                      {intro}
+                    </div>
+                  </div>
                 </div>
                 <div class="dots">{dots}</div>
                 """, unsafe_allow_html=True)
@@ -944,19 +985,23 @@ def render_screen():
                         st.rerun(scope="fragment")
 
             with cl:
-                st.markdown('<div style="font-size:0.52rem;color:rgba(255,255,255,0.18);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.6rem;padding-left:0.3rem">Recent actief</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:0.52rem;color:rgba(255,255,255,0.18);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.6rem;padding-left:0.3rem">Per recruiter</div>', unsafe_allow_html=True)
                 for i,vv in enumerate(vacs):
-                    t2=vv.get("jobTitle","—")
-                    c2=(vv.get("toCompany") or {}).get("name","—")
-                    ow2=vv.get("owner") or {}
-                    r2=f"{ow2.get('firstName','')} {ow2.get('lastName','')}".strip()
-                    cr2=pd.to_datetime(vv.get("creationDate")) if vv.get("creationDate") else None
-                    do2=(nl_now()-cr2.replace(tzinfo=None)).days if cr2 else 0
-                    cls2="vac-sm cur" if i==idx else "vac-sm"
-                    dc2="#e92076" if do2>60 else "#f5a623" if do2>30 else "rgba(255,255,255,0.2)"
+                    t2  = vv.get("jobTitle","—")
+                    c2  = (vv.get("toCompany") or {}).get("name","—")
+                    ow2 = vv.get("owner") or {}
+                    r2  = f"{ow2.get('firstName','')} {ow2.get('lastName','')}".strip() or "—"
+                    cr2 = pd.to_datetime(vv.get("creationDate")) if vv.get("creationDate") else None
+                    do2 = (nl_now()-cr2.replace(tzinfo=None)).days if cr2 else 0
+                    cls2= "vac-sm cur" if i==idx else "vac-sm"
+                    dc2 = "#e92076" if do2>60 else "#f5a623" if do2>30 else "rgba(255,255,255,0.2)"
                     st.markdown(f"""<div class="{cls2}">
                         <div class="vac-sm-t">{t2}</div>
-                        <div class="vac-sm-c">🏢 {c2} · 👤 {r2} · <span style="color:{dc2}">{do2}d</span></div>
+                        <div class="vac-sm-c" style="margin-top:0.15rem;">
+                          <span style="color:rgba(255,255,255,0.45);font-weight:500">{r2}</span>
+                          · {c2}
+                          · <span style="color:{dc2}">{do2}d</span>
+                        </div>
                     </div>""", unsafe_allow_html=True)
 
 render_screen()
