@@ -402,8 +402,9 @@ def load_invoice_df():
             cons=[users.get(u,f"User {u}") for u in fu]
         if not cons: cons=["Mireille Prooi"]
         rp=adj/len(cons)
+        iid=str(i.get("invoice_id") or i.get("internal_id") or "")
         for c in cons:
-            rows.append({"consultant":c,"amount":adj,"revenue":rp,
+            rows.append({"invoice_id":iid,"consultant":c,"amount":adj,"revenue":rp,
                 "date":date,"month":month})
     return pd.DataFrame(rows), forecast, daily_days, daily_rev
 
@@ -481,6 +482,8 @@ def load_vacancies():
         total_count = len(active)
 
         # Sort newest first, then keep best (most recent) vacancy per recruiter
+        # Exclude internal/backoffice accounts
+        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice", na=False)]
         active = active.sort_values("creation_date", ascending=False)
         active["_owner_key"] = active["owner"].astype(str).str.strip().str.lower()
         one_per = active.drop_duplicates(subset=["_owner_key"], keep="first")
@@ -500,6 +503,8 @@ def load_vacancies():
             intro_clean = _re.sub(r'<[^>]+>', '', intro_raw).strip()
             intro_clean = intro_clean[:200] + "…" if len(intro_clean) > 200 else intro_clean
 
+            match_count = int(v.get("match_count", 0) or 0)
+            agency      = str(v.get("agency",""))
             result.append({
                 "_id":          str(v.get("vacancy_id","")),
                 "jobTitle":     str(v.get("job_title","")),
@@ -511,6 +516,8 @@ def load_vacancies():
                                  "lastName":  " ".join(owner_parts[1:]) if len(owner_parts)>1 else ""},
                 "workLocation": str(v.get("work_location", v.get("workLocation",""))),
                 "intro":        intro_clean,
+                "match_count":  match_count,
+                "agency":       agency,
             })
         return result, total_count
     except Exception as e:
@@ -533,16 +540,19 @@ if not data_ok or df.empty:
 # Pre-compute
 df_cur=df[df["month"]==CURRENT_MONTH]
 df_prev=df[df["month"]==PREV_MONTH]
-tot=df_cur.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
+# Deduplicate on invoice_id for company total (matches Final dashboard logic)
+# An invoice split across 2 consultants has 2 rows with same invoice_id — only count amount once
+tot=df_cur.drop_duplicates(subset=["invoice_id"])["amount"].sum()
 # Compare vs same day-of-month in previous month (not the full prev month total)
 today_day = nl_now().day
-df_prev_ytd = df_prev[df_prev["date"].dt.day <= today_day].drop_duplicates(subset=["consultant","amount","date"])
+df_prev_ytd = df_prev[df_prev["date"].dt.day <= today_day].drop_duplicates(subset=["invoice_id"])
 prev_tot_ytd = df_prev_ytd["amount"].sum()
 pct=min(tot/COMPANY_TARGET*100,100)
 rem=max(COMPANY_TARGET-tot,0)
 delta=tot-prev_tot_ytd
 dpc=(delta/prev_tot_ytd*100) if prev_tot_ytd>0 else 0
-excl=df_cur[~df_cur["consultant"].isin(["Mireille Prooi","Onbekend"])]
+EXCLUDE_CONSULTANTS = ["Mireille Prooi","Onbekend","Backoffice Lincks","Backoffice"]
+excl=df_cur[~df_cur["consultant"].isin(EXCLUDE_CONSULTANTS)]
 days_rem=days_remaining()
 tot_days=total_days()
 
@@ -841,6 +851,19 @@ def render_screen():
         ttf=f"{p['avg_ttf']} dgn" if p['avg_ttf'] else "—"
         tth=f"{p['avg_tth']} dgn" if p['avg_tth'] else "—"
 
+        # Quarter period label: 90 days back from today
+        q_start = (nl_now() - timedelta(days=90)).strftime("%-d %B")
+        q_end   = nl_now().strftime("%-d %B %Y")
+        NL_MONTHS = {"January":"januari","February":"februari","March":"maart","April":"april",
+                     "May":"mei","June":"juni","July":"juli","August":"augustus",
+                     "September":"september","October":"oktober","November":"november","December":"december"}
+        for en,nl in NL_MONTHS.items():
+            q_start=q_start.replace(en,nl); q_end=q_end.replace(en,nl)
+        st.markdown(f"""<div style="font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;
+            text-transform:uppercase;margin-bottom:1rem;">
+            Kwartaal · {q_start} – {q_end}
+        </div>""", unsafe_allow_html=True)
+
         kpis=[
             ("Op Gesprek",      p["op_gesprek"],      "#00d4c8"),
             ("1e Gesprek Klant",p["eerste_gesprek"],  "#e92076"),
@@ -911,17 +934,14 @@ def render_screen():
             if loc in ("None","nan"): loc=""
             vno      = v.get("vacancyNo","")
             status   = v.get("statusDisplay","")
-            intro    = v.get("intro","") or ""
+            intro       = v.get("intro","") or ""
+            match_count = v.get("match_count", 0)
+            agency      = v.get("agency","") or ""
+            if agency in ("None","nan"): agency=""
 
-            # Build a clean summary if no intro available
-            if not intro:
-                intro = f"Wij zijn op zoek naar een {title} voor {company}."
-                if loc: intro += f" Standplaats: {loc}."
-
-            pills=""
-            if loc: pills+=f'<span class="pill">📍 {loc}</span>'
             days_c="#e92076" if days_open>60 else "#f5a623" if days_open>30 else "#00d4c8"
-            pills+=f'<span class="pill" style="color:{days_c};border-color:rgba(255,255,255,0.12)">⏱ {days_open} dagen open</span>'
+            pills=""
+            if loc and loc not in ("None","nan",""): pills+=f'<span class="pill">📍 {loc}</span>'
             if status: pills+=f'<span class="pill">{status}</span>'
 
             dots="".join([f'<div class="dot {"on" if i==idx else ""}"></div>' for i in range(len(vacs))])
@@ -957,18 +977,19 @@ def render_screen():
                   <div class="vac-title">{title}</div>
                   <div class="vac-company">🏢 {company}</div>
                   <div class="pills">{pills}</div>
-                  <div style="margin:0.8rem 0 1rem;padding:0.8rem 1rem;
+                  <div style="margin:0.8rem 0 1rem;padding:1rem 1.1rem;
                     background:rgba(255,255,255,0.03);border-radius:10px;
                     border-left:2px solid rgba(0,212,200,0.35);">
-                    <div style="font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:2px;
-                      text-transform:uppercase;margin-bottom:0.4rem;">Recruiter</div>
-                    <div style="font-size:1rem;font-weight:600;color:white;margin-bottom:0.5rem;">
-                      👤 {cons}
+                    <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;">
+                      <span style="font-size:0.95rem;font-weight:600;color:white;">👤 {cons}</span>
+                      {"<span style='font-size:0.72rem;color:rgba(255,255,255,0.3);'>· " + agency + "</span>" if agency else ""}
                     </div>
-                    <div style="font-size:0.82rem;color:rgba(255,255,255,0.45);line-height:1.6;">
-                      {intro}
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.7rem;">
+                      {"<span style='background:rgba(0,212,200,0.1);border:1px solid rgba(0,212,200,0.25);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:#00d4c8;'>📋 " + str(match_count) + " matches</span>" if match_count else ""}
+                      <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{vno}</span>
+                      <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{days_c};">⏱ {days_open} dagen open</span>
                     </div>
-                  </div>
+                    {("<div style='font-size:0.82rem;color:rgba(255,255,255,0.45);line-height:1.6;'>" + intro + "</div>") if intro else ""}</div>
                 </div>
                 <div class="dots">{dots}</div>
                 """, unsafe_allow_html=True)
