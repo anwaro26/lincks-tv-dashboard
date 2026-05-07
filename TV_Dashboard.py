@@ -9,6 +9,7 @@ import base64
 import streamlit.components.v1 as components
 import numpy as np
 import calendar
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(
     page_title="Lincks Performance",
@@ -168,44 +169,127 @@ def total_days():
     return calendar.monthrange(n.year,n.month)[1]
 
 def compute_forecast(inv_raw, current_tot):
+    """
+    AR(3) + multiplicative seasonality + intramonth CDF blend.
+
+    Components:
+      1. AR(3) baseline  — OLS fit on monthly totals; gives a historically-grounded
+                           anchor independent of how the current month started.
+      2. Seasonal factor — ratio of same-calendar-month historical average vs overall
+                           monthly average; adjusts for May being stronger/weaker.
+      3. Intramonth CDF  — empirical median fraction received by day D across historical
+                           months.  Captures the end-of-month invoice rush: day 7 might
+                           historically represent only ~10% of a month, so we don't
+                           extrapolate linearly.
+      4. Blend           — early in month: AR(3) dominates (actual data is scarce);
+                           late in month: intramonth CDF dominates (we can see the shape).
+    """
     try:
-        today_day=nl_now().day
-        cur_month_num=nl_now().month
-        df=inv_raw.copy()
-        df["_date"]=pd.to_datetime(df.get("date",df.get("value_date","")),errors="coerce")
-        df=df[df["_date"].notna()].copy()
-        df["_month"]=df["_date"].dt.strftime("%Y-%m")
-        df["_day"]=df["_date"].dt.day
-        df["_total"]=pd.to_numeric(df.get("total",0),errors="coerce").fillna(0)
-        df["_status"]=df.get("status","").astype(str)
-        df=df[(df["_status"]=="Verzonden")&(df["_month"]!=CURRENT_MONTH)]
-        if df.empty: return None
-        same,other=[],[]
-        for m in df["_month"].unique():
-            mdf=df[df["_month"]==m]
-            mt=mdf["_total"].sum()
-            if mt<=0: continue
-            frac=mdf[mdf["_day"]<=today_day]["_total"].sum()/mt
-            if frac<=0 or frac>1: continue
-            if int(m.split("-")[1])==cur_month_num: same.append(frac)
-            else: other.append(frac)
-        if same and other: wf=0.6*np.mean(same)+0.4*np.mean(other)
-        elif same: wf=np.mean(same)
-        elif other: wf=np.mean(other)
-        else: return None
-        raw = round(current_tot/wf) if wf>0.01 else None
-        if raw is None: return None
-        days_left = days_remaining()
-        tot_d = total_days()
-        day_today = nl_now().day
-        # On last 3 days: barely any room left
-        if days_left <= 3:
-            return round(current_tot * (1 + 0.005 * days_left))
-        # Cap forecast: can't be more than current + (remaining_days/total_days * company_target * 1.5)
-        max_possible = current_tot + (days_left / tot_d) * COMPANY_TARGET * 1.5
-        raw = max(raw, current_tot)
-        raw = min(raw, max_possible)
-        return round(raw)
+        today_day  = nl_now().day
+        cal_month  = nl_now().month
+        days_rem   = days_remaining()
+        tot_d      = total_days()
+        progress   = today_day / tot_d          # 0..1
+
+        df = inv_raw.copy()
+        df["_date"]  = pd.to_datetime(df.get("date", df.get("value_date", "")), errors="coerce")
+        df = df[df["_date"].notna()].copy()
+        df["_month"] = df["_date"].dt.strftime("%Y-%m")
+        df["_day"]   = df["_date"].dt.day
+        df["_total"] = pd.to_numeric(df.get("total", 0), errors="coerce").fillna(0)
+        df["_status"]= df.get("status", "").astype(str)
+        hist = df[(df["_status"] == "Verzonden") & (df["_month"] != CURRENT_MONTH)]
+        if hist.empty: return None
+
+        # ── 1.  Monthly totals sorted chronologically ─────────────────────────
+        monthly = hist.groupby("_month")["_total"].sum().sort_index()
+        months  = list(monthly.index)
+        totals  = list(monthly.values)
+        if len(totals) < 2: return None
+
+        # ── 2.  AR(3) via OLS (fall back to weighted mean if too few months) ──
+        ar3_pred = None
+        if len(totals) >= 5:
+            p = min(3, len(totals) - 2)          # lags actually used
+            X, y = [], []
+            for i in range(p, len(totals)):
+                X.append([1.0] + [totals[i-k] for k in range(1, p+1)])
+                y.append(totals[i])
+            X, y = np.array(X), np.array(y)
+            try:
+                coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
+                ar3_pred = coeffs[0] + sum(coeffs[k+1] * totals[-(k+1)] for k in range(p))
+                ar3_pred = max(ar3_pred, 0)
+            except Exception:
+                pass
+
+        if ar3_pred is None:
+            # Weighted average of last 3 months as fallback
+            w = np.array([0.5, 0.3, 0.2][:len(totals)])
+            w /= w.sum()
+            ar3_pred = float(np.dot(w, totals[-len(w):]))
+
+        # ── 3.  Seasonal multiplier ───────────────────────────────────────────
+        same_cal   = [t for m, t in zip(months, totals) if int(m.split("-")[1]) == cal_month]
+        overall_avg= np.mean(totals)
+        if same_cal and overall_avg > 0:
+            seasonal = np.mean(same_cal) / overall_avg
+            seasonal = np.clip(seasonal, 0.5, 2.0)   # guard against outliers
+        else:
+            seasonal = 1.0
+
+        ar3_seasonal = ar3_pred * seasonal
+
+        # ── 4.  Intramonth CDF extrapolation ─────────────────────────────────
+        # For each historical month collect: fraction of total revenue received by day D.
+        # Weighting: same calendar-month counts double (stronger seasonal signal).
+        fracs = []
+        weights = []
+        for m in monthly.index:
+            mdf = hist[hist["_month"] == m]
+            mt  = mdf["_total"].sum()
+            if mt <= 0: continue
+            frac = mdf[mdf["_day"] <= today_day]["_total"].sum() / mt
+            if not (0 < frac <= 1): continue
+            w = 2.0 if int(m.split("-")[1]) == cal_month else 1.0
+            fracs.append(frac)
+            weights.append(w)
+
+        intra_pred = None
+        if fracs:
+            # Weighted median (more robust than mean for skewed end-of-month distributions)
+            fracs_arr   = np.array(fracs)
+            weights_arr = np.array(weights) / np.sum(weights)
+            sorted_idx  = np.argsort(fracs_arr)
+            csw = np.cumsum(weights_arr[sorted_idx])
+            median_frac = float(fracs_arr[sorted_idx[np.searchsorted(csw, 0.5)]])
+            if median_frac > 0.02:
+                intra_pred = current_tot / median_frac
+
+        # ── 5.  Blend AR(3) + intramonth ─────────────────────────────────────
+        # Early in month (day 1-7): AR(3)+seasonality dominates because we have little
+        # actual data and the first few days are noisy.
+        # Late in month (day 20+): intramonth CDF is reliable; trust it more.
+        if intra_pred is not None and ar3_seasonal > 0:
+            intra_w = np.clip(0.15 + progress * 0.85, 0.15, 0.9)
+            ar3_w   = 1.0 - intra_w
+            blended = ar3_w * ar3_seasonal + intra_w * intra_pred
+        elif intra_pred is not None:
+            blended = intra_pred
+        else:
+            blended = ar3_seasonal
+
+        # ── 6.  Sanity bounds ─────────────────────────────────────────────────
+        if days_rem <= 3:
+            return round(current_tot * (1 + 0.008 * days_rem))
+
+        hist_p90   = np.percentile(totals, 90) if totals else COMPANY_TARGET
+        max_cap    = max(current_tot, min(hist_p90 * 1.3,
+                         current_tot + (days_rem / tot_d) * COMPANY_TARGET))
+        blended    = np.clip(blended, current_tot, max_cap)
+
+        return round(blended)
+
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
 
@@ -446,6 +530,9 @@ if "vac_idx" not in st.session_state: st.session_state["vac_idx"]=0
 if "locked"  not in st.session_state: st.session_state["locked"]=False
 if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
 if "vac_ts"  not in st.session_state: st.session_state["vac_ts"]=_time.time()
+
+# Auto-rerun every 10s so the 60s screen-switch and 6s vacancy-cycle checks fire on time
+st_autorefresh(interval=10_000, limit=None, key="tv_autorefresh")
 
 now_t=_time.time()
 if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
