@@ -447,13 +447,17 @@ def load_pipeline():
             s["aanbod"]        = int(stage_counts.get("4. Aanbod", 0))
             s["geplaatst"]     = int(stage_counts.get("5. Geplaatst", 0))
 
-        # Placements parquet for geplaatst + TTF/TTH (more reliable)
+        # Placements parquet for geplaatst + TTF/TTH — rolling quarter (same window as funnel)
         pl = pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
         pl["creation_date"]  = pd.to_datetime(pl.get("creation_date",""), errors="coerce")
         pl["vacancy_created"]= pd.to_datetime(pl.get("vacancy_created",""), errors="coerce")
         pl["match_created"]  = pd.to_datetime(pl.get("match_created",""), errors="coerce")
-        pl["month"] = pl["creation_date"].dt.strftime("%Y-%m")
-        cur_pl = pl[pl["month"] == CURRENT_MONTH].copy()
+        quarter_cutoff = nl_now() - timedelta(days=90)
+        cur_pl = pl[pl["creation_date"] >= quarter_cutoff].copy()
+        # Fall back to current month only if quarter is somehow empty
+        if cur_pl.empty:
+            pl["month"] = pl["creation_date"].dt.strftime("%Y-%m")
+            cur_pl = pl[pl["month"] == CURRENT_MONTH].copy()
         if not cur_pl.empty:
             s["geplaatst"] = max(s["geplaatst"], len(cur_pl))
             ttf = (cur_pl["creation_date"]-cur_pl["vacancy_created"]).dt.days.dropna()
@@ -518,11 +522,14 @@ if not data_ok or df.empty:
 df_cur=df[df["month"]==CURRENT_MONTH]
 df_prev=df[df["month"]==PREV_MONTH]
 tot=df_cur.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
-prev_tot=df_prev.drop_duplicates(subset=["consultant","amount","date"])["amount"].sum()
+# Compare vs same day-of-month in previous month (not the full prev month total)
+today_day = nl_now().day
+df_prev_ytd = df_prev[df_prev["date"].dt.day <= today_day].drop_duplicates(subset=["consultant","amount","date"])
+prev_tot_ytd = df_prev_ytd["amount"].sum()
 pct=min(tot/COMPANY_TARGET*100,100)
 rem=max(COMPANY_TARGET-tot,0)
-delta=tot-prev_tot
-dpc=(delta/prev_tot*100) if prev_tot>0 else 0
+delta=tot-prev_tot_ytd
+dpc=(delta/prev_tot_ytd*100) if prev_tot_ytd>0 else 0
 excl=df_cur[~df_cur["consultant"].isin(["Mireille Prooi","Onbekend"])]
 days_rem=days_remaining()
 tot_days=total_days()
@@ -686,18 +693,46 @@ def render_screen():
                 all_days=list(range(1,tot_days+1))
                 # Actual line up to today
                 act_x=daily_days; act_y=daily_rev
-                # Forecast dotted line from today to end of month
-                if forecast and len(act_y)>0:
-                    last_val=act_y[-1]
-                    rem_days=tot_days-daily_days[-1]
-                    if rem_days>0:
-                        step=(forecast-last_val)/rem_days
-                        fc_x=list(range(daily_days[-1],tot_days+1))
-                        fc_y=[last_val+step*i for i in range(len(fc_x))]
-                    else:
-                        fc_x,fc_y=[],[]
-                else:
-                    fc_x,fc_y=[],[]
+                # Forecast curve: run model for each future day using cumulative revenue
+                # at that point, giving a realistic curved path rather than a straight line.
+                fc_x, fc_y = [], []
+                if forecast and len(act_y) > 0:
+                    inv_raw_fc = pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet"))
+                    last_day   = daily_days[-1]
+                    last_val   = act_y[-1]
+                    rem_days   = tot_days - last_day
+                    if rem_days > 0:
+                        # Distribute remaining revenue via empirical intramonth shape:
+                        # compute what fraction of a month falls in each remaining day,
+                        # then scale so total matches the model's end-of-month forecast.
+                        hist_df = inv_raw_fc.copy()
+                        hist_df["_date"]  = pd.to_datetime(hist_df.get("date", hist_df.get("value_date","")), errors="coerce")
+                        hist_df["_month"] = hist_df["_date"].dt.strftime("%Y-%m")
+                        hist_df["_day"]   = hist_df["_date"].dt.day
+                        hist_df["_total"] = pd.to_numeric(hist_df.get("total",0), errors="coerce").fillna(0)
+                        hist_df["_status"]= hist_df.get("status","").astype(str)
+                        hist_past = hist_df[(hist_df["_status"]=="Verzonden") & (hist_df["_month"]!=CURRENT_MONTH)]
+                        # Average daily revenue as fraction of month total across history
+                        day_weights = {}
+                        for m in hist_past["_month"].unique():
+                            mdf = hist_past[hist_past["_month"]==m]
+                            mt  = mdf["_total"].sum()
+                            if mt <= 0: continue
+                            for d, g in mdf.groupby("_day"):
+                                day_weights[d] = day_weights.get(d, []) + [g["_total"].sum() / mt]
+                        avg_day_frac = {d: float(np.mean(v)) for d, v in day_weights.items()}
+                        # Sum of weights for remaining days
+                        future_days = list(range(last_day + 1, tot_days + 1))
+                        raw_w = [avg_day_frac.get(d, 0.001) for d in future_days]
+                        total_rem_frac = sum(raw_w) if sum(raw_w) > 0 else 1
+                        remaining_revenue = forecast - last_val
+                        cumulative = last_val
+                        fc_x = [last_day]
+                        fc_y = [last_val]
+                        for i, d in enumerate(future_days):
+                            cumulative += remaining_revenue * (raw_w[i] / total_rem_frac)
+                            fc_x.append(d)
+                            fc_y.append(round(cumulative))
 
                 fig_rev=go.Figure()
                 fig_rev.add_trace(go.Scatter(
@@ -830,7 +865,7 @@ def render_screen():
             clr2="#00e5a0" if delta>=0 else "#e92076"
             st.markdown(f"""
             <div class="card" style="margin-bottom:0.8rem"><div class="card-top"></div>
-                <div class="card-label">vs vorige maand</div>
+                <div class="card-label">vs vorige maand (t/m dag {today_day})</div>
                 <div style="font-family:Syne,sans-serif;font-size:1.8rem;font-weight:800;
                     color:{clr2};margin-top:0.2rem">{arrow} €{abs(delta):,.0f}</div>
                 <div class="card-sub">{dpc:+.1f}%</div>
