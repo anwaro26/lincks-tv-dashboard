@@ -272,10 +272,10 @@ def load_invoice_df():
         try:
             pl_rows=[]
             for page_num in range(0, 5):
-                # Fetch placements from last 90 days — not just since last_sync.
-                # Invoices can reference placements created months before the invoice date
-                # (e.g. a March placement billed in May). Using last_sync misses those.
-                pl_cutoff = (nl_now() - timedelta(days=90)).strftime("%Y-%m-%d")
+                # Fetch placements from last 180 days — invoices can reference placements
+                # created many months before the invoice date. The parquet covers up to
+                # last_sync; this fetch covers last_sync → today plus a wide overlap buffer.
+                pl_cutoff = (nl_now() - timedelta(days=180)).strftime("%Y-%m-%d")
                 q=f"""{{ crJobPage(qualifier: "creationDate > (NSCalendarDate) '{pl_cutoff} 00:00:00'",
                           pageable: {{page: {page_num}, size: 100}}) {{
                     totalElements
@@ -321,9 +321,8 @@ def load_invoice_df():
     # Daily revenue for chart
     daily_days, daily_rev = compute_daily_revenue(inv_raw)
 
-    # Forecast
-    cur_tot_approx=sum(daily_rev) if daily_rev else 0
-    forecast=compute_forecast(inv_raw, cur_tot_approx)
+    # Forecast is computed OUTSIDE this cached function using the deduplicated tot
+    # (invoice split across 2 consultants = 2 rows; daily_rev double-counts it)
 
     # Filter to current+prev month
     inv_raw["_vd"]=pd.to_datetime(inv_raw.get("value_date",""),errors="coerce")
@@ -365,7 +364,10 @@ def load_invoice_df():
         for c in cons:
             rows.append({"invoice_id":iid,"consultant":c,"amount":adj,"revenue":rp,
                 "date":date,"month":month})
-    return pd.DataFrame(rows), forecast, daily_days, daily_rev
+    mp_amt = sum(r["amount"] for r in rows if r["consultant"]=="Mireille Prooi" and r["month"]==CURRENT_MONTH)
+    real_amt = sum(r["amount"] for r in rows if r["consultant"]!="Mireille Prooi" and r["month"]==CURRENT_MONTH)
+    print(f"[JOB_MAP] current month: attributed={real_amt:.0f} fallback_MP={mp_amt:.0f} placements_in_map={len(job_map)}")
+    return pd.DataFrame(rows), daily_days, daily_rev
 
 def classify_match_stage(row):
     """Classify match into funnel stage — same logic as internal dashboard."""
@@ -494,7 +496,7 @@ def load_vacancies():
 # ── Load all ──────────────────────────────────────────────────────────────────
 with st.spinner(""):
     try:
-        df,forecast,daily_days,daily_rev=load_invoice_df()
+        df,daily_days,daily_rev=load_invoice_df()
         pipeline=load_pipeline()
         vacs,open_vac_count=load_vacancies()
         data_ok=True
@@ -523,9 +525,9 @@ excl=df_cur[~df_cur["consultant"].isin(EXCLUDE_CONSULTANTS)]
 days_rem=days_remaining()
 tot_days=total_days()
 
-# Recompute forecast with actual tot
-forecast=compute_forecast(
-    pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet")), tot) if forecast is None else forecast
+# Always compute forecast fresh with deduplicated tot — not inside the cached function
+# (cached function used non-deduped daily_rev which double-counts split invoices)
+forecast=compute_forecast(pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet")), tot)
 
 # ── State ─────────────────────────────────────────────────────────────────────
 if "screen"  not in st.session_state: st.session_state["screen"]=0
