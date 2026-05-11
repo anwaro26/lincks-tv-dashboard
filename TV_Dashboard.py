@@ -790,6 +790,13 @@ def render_screen():
             for k, v in TARGETS.items():
                 if k.split()[-1] == last: return v
             return DEFAULT_TARGET
+        # Add all recruiters from TARGETS who have a target > 0 but no invoices yet this month
+        existing = set(rc_df["consultant"].tolist())
+        zero_rows = [{"consultant": name, "revenue": 0.0}
+                     for name, target in TARGETS.items()
+                     if target > 0 and name not in existing]
+        if zero_rows:
+            rc_df = pd.concat([rc_df, pd.DataFrame(zero_rows)], ignore_index=True)
         rc_df["target"]    = rc_df["consultant"].apply(get_target_bar)
         rc_df["pct"]       = (rc_df["revenue"] / rc_df["target"] * 100).round(1)
         rc_df["resterend"] = (rc_df["target"] - rc_df["revenue"]).clip(lower=0)
@@ -818,7 +825,7 @@ def render_screen():
             yaxis=dict(tickfont=dict(size=13), gridcolor="rgba(0,0,0,0)"),
             legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
                 font=dict(color="rgba(255,255,255,0.35)", size=10)),
-            margin=dict(l=0, r=10, t=30, b=0), height=300, bargap=0.22
+            margin=dict(l=0, r=10, t=30, b=0), height=max(300, len(rc_df) * 42), bargap=0.22
         )
         st.plotly_chart(fig3, use_container_width=True)
 
