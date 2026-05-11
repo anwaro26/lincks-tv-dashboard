@@ -272,7 +272,11 @@ def load_invoice_df():
         try:
             pl_rows=[]
             for page_num in range(0, 5):
-                q=f"""{{ crJobPage(qualifier: "creationDate > (NSCalendarDate) '{last_sync} 00:00:00'",
+                # Fetch placements from last 90 days — not just since last_sync.
+                # Invoices can reference placements created months before the invoice date
+                # (e.g. a March placement billed in May). Using last_sync misses those.
+                pl_cutoff = (nl_now() - timedelta(days=90)).strftime("%Y-%m-%d")
+                q=f"""{{ crJobPage(qualifier: "creationDate > (NSCalendarDate) '{pl_cutoff} 00:00:00'",
                           pageable: {{page: {page_num}, size: 100}}) {{
                     totalElements
                     items {{
