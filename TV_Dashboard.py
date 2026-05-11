@@ -234,7 +234,7 @@ def load_invoice_df():
             total=(probe.get("data",{}).get("crInvoicePage") or {}).get("totalElements",0)
             if total:
                 lp=(total-1)//100
-                # Fetch last 5 pages (500 invoices) to capture all recent months — same as Final dashboard
+                # Fetch last 5 pages (500 invoices) to capture all recent months
                 for pn in range(max(0,lp-4),lp+1):
                     q=f"""{{ crInvoicePage(pageable:{{page:{pn},size:100}}){{
                         items{{ _id invoiceID valueDate date total statusDisplay
@@ -265,7 +265,54 @@ def load_invoice_df():
                         inv_raw=pd.concat([inv_raw,new_df],ignore_index=True).drop_duplicates(
                             subset=["internal_id"],keep="last")
                     _time.sleep(0.3)
-        except Exception as e: print(f"[FETCH] {e}")
+        except Exception as e: print(f"[FETCH invoices] {e}")
+
+        # Also fetch recent placements so job_map covers current-month invoices.
+        # Without this, new invoices can't find their job_id and fall to Mireille Prooi.
+        try:
+            pl_rows=[]
+            for page_num in range(0, 5):
+                q=f"""{{ crJobPage(qualifier: "creationDate > (NSCalendarDate) '{last_sync} 00:00:00'",
+                          pageable: {{page: {page_num}, size: 100}}) {{
+                    totalElements
+                    items {{
+                        _id startDate creationDate additionalInfo
+                        toEmployee {{ firstName lastName }} toCompany {{ name }} agency {{ name }}
+                        toVacancy {{ _id creationDate }} toMatch {{ _id creationDate }}
+                    }}
+                }} }}"""
+                data=run_query(q)
+                page=(data.get("data",{}).get("crJobPage") or {})
+                items=page.get("items",[])
+                if not items: break
+                for p_item in items:
+                    info=p_item.get("additionalInfo") or {}
+                    vacancy=p_item.get("toVacancy") or {}
+                    match=p_item.get("toMatch") or {}
+                    pl_rows.append({
+                        "placement_id":   str(p_item["_id"]),
+                        "start_date":     p_item.get("startDate"),
+                        "creation_date":  p_item.get("creationDate"),
+                        "candidate_name": f"{(p_item.get('toEmployee') or {}).get('firstName','')} {(p_item.get('toEmployee') or {}).get('lastName','')}".strip(),
+                        "company":        (p_item.get("toCompany") or {}).get("name","Unknown"),
+                        "agency":         (p_item.get("agency") or {}).get("name","Unknown"),
+                        "vacancy_id":     str(vacancy.get("_id","")),
+                        "vacancy_created":vacancy.get("creationDate"),
+                        "match_id":       str(match.get("_id","")),
+                        "match_created":  match.get("creationDate"),
+                        "fase_6525":      str(info.get("_6525","")),
+                        "fase_6526":      str(info.get("_6526","")),
+                        "fase_6527":      str(info.get("_6527","")),
+                        "fase_6528":      str(info.get("_6528","")),
+                        "fase_6538":      str(info.get("_6538","")),
+                    })
+                if len(pl_rows) >= page.get("totalElements",0): break
+                _time.sleep(0.3)
+            if pl_rows:
+                new_pl=pd.DataFrame(pl_rows)
+                pl=pd.concat([pl,new_pl],ignore_index=True).drop_duplicates(subset=["placement_id"],keep="last")
+                print(f"[FETCH placements] +{len(pl_rows)} → total {len(pl)}")
+        except Exception as e: print(f"[FETCH placements] {e}")
 
     # Daily revenue for chart
     daily_days, daily_rev = compute_daily_revenue(inv_raw)
