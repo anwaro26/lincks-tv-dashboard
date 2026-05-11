@@ -174,125 +174,28 @@ def total_days():
 
 def compute_forecast(inv_raw, current_tot):
     """
-    AR(3) + multiplicative seasonality + intramonth CDF blend.
-
-    Components:
-      1. AR(3) baseline  — OLS fit on monthly totals; gives a historically-grounded
-                           anchor independent of how the current month started.
-      2. Seasonal factor — ratio of same-calendar-month historical average vs overall
-                           monthly average; adjusts for May being stronger/weaker.
-      3. Intramonth CDF  — empirical median fraction received by day D across historical
-                           months.  Captures the end-of-month invoice rush: day 7 might
-                           historically represent only ~10% of a month, so we don't
-                           extrapolate linearly.
-      4. Blend           — early in month: AR(3) dominates (actual data is scarce);
-                           late in month: intramonth CDF dominates (we can see the shape).
+    Conservative linear extrapolation:
+      base     = current_tot / (day_of_month / total_days)  — simple daily run-rate scale-up
+      hard_cap = current_tot + days_remaining * daily_rate * 1.1  — never more than run-rate + 10%
+    Returns current_tot unchanged in last 3 days of month.
     """
     try:
-        today_day  = nl_now().day
-        cal_month  = nl_now().month
-        days_rem   = days_remaining()
-        tot_d      = total_days()
-        progress   = today_day / tot_d          # 0..1
+        today_day = nl_now().day
+        tot_d     = total_days()
+        days_rem  = days_remaining()
 
-        df = inv_raw.copy()
-        df["_date"]  = pd.to_datetime(df.get("date", df.get("value_date", "")), errors="coerce")
-        df = df[df["_date"].notna()].copy()
-        df["_month"] = df["_date"].dt.strftime("%Y-%m")
-        df["_day"]   = df["_date"].dt.day
-        df["_total"] = pd.to_numeric(df.get("total", 0), errors="coerce").fillna(0)
-        df["_status"]= df.get("status", "").astype(str)
-        hist = df[(df["_status"] == "Verzonden") & (df["_month"] != CURRENT_MONTH)]
-        if hist.empty: return None
-
-        # ── 1.  Monthly totals sorted chronologically ─────────────────────────
-        monthly = hist.groupby("_month")["_total"].sum().sort_index()
-        months  = list(monthly.index)
-        totals  = list(monthly.values)
-        if len(totals) < 2: return None
-
-        # ── 2.  AR(3) via OLS (fall back to weighted mean if too few months) ──
-        ar3_pred = None
-        if len(totals) >= 5:
-            p = min(3, len(totals) - 2)          # lags actually used
-            X, y = [], []
-            for i in range(p, len(totals)):
-                X.append([1.0] + [totals[i-k] for k in range(1, p+1)])
-                y.append(totals[i])
-            X, y = np.array(X), np.array(y)
-            try:
-                coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
-                ar3_pred = coeffs[0] + sum(coeffs[k+1] * totals[-(k+1)] for k in range(p))
-                ar3_pred = max(ar3_pred, 0)
-            except Exception:
-                pass
-
-        if ar3_pred is None:
-            # Weighted average of last 3 months as fallback
-            w = np.array([0.5, 0.3, 0.2][:len(totals)])
-            w /= w.sum()
-            ar3_pred = float(np.dot(w, totals[-len(w):]))
-
-        # ── 3.  Seasonal multiplier ───────────────────────────────────────────
-        same_cal   = [t for m, t in zip(months, totals) if int(m.split("-")[1]) == cal_month]
-        overall_avg= np.mean(totals)
-        if same_cal and overall_avg > 0:
-            seasonal = np.mean(same_cal) / overall_avg
-            seasonal = np.clip(seasonal, 0.5, 2.0)   # guard against outliers
-        else:
-            seasonal = 1.0
-
-        ar3_seasonal = ar3_pred * seasonal
-
-        # ── 4.  Intramonth CDF extrapolation ─────────────────────────────────
-        # For each historical month collect: fraction of total revenue received by day D.
-        # Weighting: same calendar-month counts double (stronger seasonal signal).
-        fracs = []
-        weights = []
-        for m in monthly.index:
-            mdf = hist[hist["_month"] == m]
-            mt  = mdf["_total"].sum()
-            if mt <= 0: continue
-            frac = mdf[mdf["_day"] <= today_day]["_total"].sum() / mt
-            if not (0 < frac <= 1): continue
-            w = 2.0 if int(m.split("-")[1]) == cal_month else 1.0
-            fracs.append(frac)
-            weights.append(w)
-
-        intra_pred = None
-        if fracs:
-            # Weighted median (more robust than mean for skewed end-of-month distributions)
-            fracs_arr   = np.array(fracs)
-            weights_arr = np.array(weights) / np.sum(weights)
-            sorted_idx  = np.argsort(fracs_arr)
-            csw = np.cumsum(weights_arr[sorted_idx])
-            median_frac = float(fracs_arr[sorted_idx[np.searchsorted(csw, 0.5)]])
-            if median_frac > 0.02:
-                intra_pred = current_tot / median_frac
-
-        # ── 5.  Blend AR(3) + intramonth ─────────────────────────────────────
-        # Early in month (day 1-7): AR(3)+seasonality dominates because we have little
-        # actual data and the first few days are noisy.
-        # Late in month (day 20+): intramonth CDF is reliable; trust it more.
-        if intra_pred is not None and ar3_seasonal > 0:
-            intra_w = np.clip(0.15 + progress * 0.85, 0.15, 0.9)
-            ar3_w   = 1.0 - intra_w
-            blended = ar3_w * ar3_seasonal + intra_w * intra_pred
-        elif intra_pred is not None:
-            blended = intra_pred
-        else:
-            blended = ar3_seasonal
-
-        # ── 6.  Sanity bounds ─────────────────────────────────────────────────
         if days_rem <= 3:
-            return round(current_tot * (1 + 0.008 * days_rem))
+            return current_tot
+        if today_day == 0 or current_tot <= 0:
+            return None
 
-        hist_p90   = np.percentile(totals, 90) if totals else COMPANY_TARGET
-        max_cap    = max(current_tot, min(hist_p90 * 1.3,
-                         current_tot + (days_rem / tot_d) * COMPANY_TARGET))
-        blended    = np.clip(blended, current_tot, max_cap)
+        daily_rate = current_tot / today_day
+        # Linear extrapolation: scale by remaining fraction of month
+        linear   = current_tot / (today_day / tot_d)
+        # Hard cap: never let forecast exceed current + run-rate * 1.1 for remaining days
+        hard_cap = current_tot + days_rem * daily_rate * 1.1
 
-        return round(blended)
+        return round(min(linear, hard_cap))
 
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
@@ -827,34 +730,43 @@ def render_screen():
 
         # Recruiter bar always shown below
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-        rev_consultant = excl.groupby("consultant")["revenue"].sum().reset_index()
-        def get_t(n):
-            if n in TARGETS: return TARGETS[n]
-            last=n.split()[-1] if n else ""
-            for k,v in TARGETS.items():
-                if k.split()[-1]==last: return v
+        rc_df = df_cur[df_cur["consultant"] != "Mireille Prooi"].groupby("consultant")["revenue"].sum().reset_index()
+        def get_target_bar(name):
+            if name in TARGETS: return TARGETS[name]
+            last = name.split()[-1] if name else ""
+            for k, v in TARGETS.items():
+                if k.split()[-1] == last: return v
             return DEFAULT_TARGET
-        rev_consultant["target"]    = rev_consultant["consultant"].apply(get_t)
-        rev_consultant["pct"]       = (rev_consultant["revenue"] / rev_consultant["target"] * 100).round(1)
-        rev_consultant              = rev_consultant.sort_values("revenue", ascending=True)
-        rev_consultant["color"]     = rev_consultant["pct"].apply(lambda x: "#63ccca" if x >= 100 else ("#f5a623" if x >= 80 else "#e92076"))
-        rev_consultant["resterend"] = (rev_consultant["target"] - rev_consultant["revenue"]).clip(lower=0)
+        rc_df["target"]    = rc_df["consultant"].apply(get_target_bar)
+        rc_df["pct"]       = (rc_df["revenue"] / rc_df["target"] * 100).round(1)
+        rc_df["resterend"] = (rc_df["target"] - rc_df["revenue"]).clip(lower=0)
+        rc_df              = rc_df.sort_values("revenue", ascending=True)
+        rc_df["color"]     = rc_df["pct"].apply(lambda x: "#00e5a0" if x >= 100 else ("#f5a623" if x >= 80 else "#e92076"))
         fig3 = go.Figure()
-        fig3.add_trace(go.Bar(x=rev_consultant["revenue"], y=rev_consultant["consultant"], orientation="h", name="Behaald",
-            marker_color=rev_consultant["color"], marker_line_width=0,
-            text=rev_consultant.apply(lambda r: f"€{r['revenue']:,.0f}  ({r['pct']:.0f}%)", axis=1),
-            textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=12, family="Inter"),
-            customdata=rev_consultant[["target", "pct"]].values,
-            hovertemplate="<b>%{y}</b><br>Behaald: €%{x:,.0f}<br>Target: €%{customdata[0]:,.0f}<br>%{customdata[1]:.0f}% van target<extra></extra>"))
-        fig3.add_trace(go.Bar(x=rev_consultant["resterend"], y=rev_consultant["consultant"], orientation="h", name="Resterend",
-            marker_color="rgba(255,255,255,0.08)", marker_line_color="rgba(255,255,255,0.15)", marker_line_width=1,
-            hovertemplate="<b>%{y}</b><br>Nog te gaan: €%{x:,.0f}<extra></extra>"))
-        fig3.update_layout(barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        fig3.add_trace(go.Bar(
+            x=rc_df["revenue"], y=rc_df["consultant"], orientation="h", name="Behaald",
+            marker_color=rc_df["color"], marker_line_width=0,
+            text=rc_df.apply(lambda r: f"€{r['revenue']:,.0f}  ({r['pct']:.0f}%)", axis=1),
+            textposition="inside", insidetextanchor="middle",
+            textfont=dict(color="white", size=12),
+            customdata=rc_df[["target","pct"]].values,
+            hovertemplate="<b>%{y}</b><br>Behaald: €%{x:,.0f}<br>Target: €%{customdata[0]:,.0f}<br>%{customdata[1]:.0f}%<extra></extra>"
+        ))
+        fig3.add_trace(go.Bar(
+            x=rc_df["resterend"], y=rc_df["consultant"], orientation="h", name="Resterend",
+            marker_color="rgba(255,255,255,0.05)",
+            marker_line_color="rgba(255,255,255,0.1)", marker_line_width=1,
+            hovertemplate="<b>%{y}</b><br>Nog te gaan: €%{x:,.0f}<extra></extra>"
+        ))
+        fig3.update_layout(
+            barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             font_color="rgba(255,255,255,0.5)",
-            xaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickprefix="€", tickfont=dict(size=10), zeroline=False),
-            yaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickfont=dict(size=13, family="Inter")),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="white")),
-            margin=dict(l=0, r=0, t=30, b=0), height=380, bargap=0.2)
+            xaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickprefix="€", tickfont=dict(size=10), zeroline=False),
+            yaxis=dict(tickfont=dict(size=13), gridcolor="rgba(0,0,0,0)"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
+                font=dict(color="rgba(255,255,255,0.35)", size=10)),
+            margin=dict(l=0, r=10, t=30, b=0), height=300, bargap=0.22
+        )
         st.plotly_chart(fig3, use_container_width=True)
 
     # ── PIPELINE ─────────────────────────────────────────────────────────────
