@@ -494,14 +494,13 @@ def load_vacancies():
         return [], 0
 
 # ── Load all ──────────────────────────────────────────────────────────────────
-with st.spinner(""):
-    try:
-        df,daily_days,daily_rev=load_invoice_df()
-        pipeline=load_pipeline()
-        vacs,open_vac_count=load_vacancies()
-        data_ok=True
-    except Exception as e:
-        st.error(f"Error: {e}"); data_ok=False
+try:
+    df,daily_days,daily_rev=load_invoice_df()
+    pipeline=load_pipeline()
+    vacs,open_vac_count=load_vacancies()
+    data_ok=True
+except Exception as e:
+    st.error(f"Error: {e}"); data_ok=False
 
 if not data_ok or df.empty:
     st.warning("Geen data."); st.stop()
@@ -537,7 +536,7 @@ if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
 if "vac_ts"  not in st.session_state: st.session_state["vac_ts"]=_time.time()
 
 # Auto-rerun every 10s so the 60s screen-switch and 6s vacancy-cycle checks fire on time
-st_autorefresh(interval=10_000, limit=None, key="tv_autorefresh")
+st_autorefresh(interval=60_000, limit=None, key="tv_autorefresh")
 
 now_t=_time.time()
 if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
@@ -597,7 +596,6 @@ with hc2:
 st.markdown('<div class="divider" style="margin-top:0.5rem"></div>', unsafe_allow_html=True)
 
 # ── Nav ───────────────────────────────────────────────────────────────────────
-@st.fragment
 def render_nav():
     n1,n2,n3=st.columns([1,1,2])
     with n1:
@@ -619,7 +617,6 @@ render_nav()
 # ════════════════════════════════════════════════════════════════
 # SCREENS
 # ════════════════════════════════════════════════════════════════
-@st.fragment
 def render_screen():
     scr=st.session_state["screen"]
 
