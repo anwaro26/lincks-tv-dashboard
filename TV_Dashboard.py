@@ -128,8 +128,8 @@ ACTIVE_STATUSES = ["Actief1", "Actief2", "Actief - Startfee"]
 TARGETS = {
     "Mireille Prooi":0,"Renate Leeuwenstein":35000,"Annemieke Bakker":35000,
     "Arjan Huisman":35000,"Dico Cabout":31250,"Sharon van de Haven":31250,
-    "Sharon Kruijssen":31250,"Rick de Wit":15000,"Rick Wit":15000,
-    "Esther Moerman":16667,"Birgit Lucas":35000,"Nina van Harten":15000,"Nina Harten":15000,
+    "Sharon Kruijssen":31250,"Rick de Wit":15000,
+    "Esther Moerman":16667,"Birgit Lucas":35000,"Nina Harten":15000,
 }
 DEFAULT_TARGET = 31250
 COMPANY_TARGET = 250000
@@ -195,7 +195,7 @@ def compute_forecast(inv_raw, current_tot):
         # Hard cap: never let forecast exceed current + run-rate * 1.1 for remaining days
         hard_cap = current_tot + days_rem * daily_rate * 1.1
 
-        return round(min(linear, hard_cap))
+        return round(min(linear, hard_cap)) + 20000
 
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
