@@ -174,10 +174,13 @@ def total_days():
 
 def compute_forecast(inv_raw, current_tot):
     """
-    Conservative linear extrapolation:
-      base     = current_tot / (day_of_month / total_days)  — simple daily run-rate scale-up
-      hard_cap = current_tot + days_remaining * daily_rate * 1.1  — never more than run-rate + 10%
-    Returns current_tot unchanged in last 3 days of month.
+    Shape-based + momentum blend forecast.
+    - Builds empirical day-of-month shape from all historical invoices
+    - Shape forecast: current_tot / fraction_of_month_already_elapsed
+    - Linear forecast: simple daily-rate extrapolation
+    - Blend: early in month weight shape more, late in month weight linear more
+    - Ceiling: max of last 3 completed months × 2.5  (never collapses on day 1)
+    - Floor: current_tot (never forecast less than what's already booked)
     """
     try:
         today_day = nl_now().day
@@ -186,16 +189,65 @@ def compute_forecast(inv_raw, current_tot):
 
         if days_rem <= 3:
             return current_tot
-        if today_day == 0 or current_tot <= 0:
+        if today_day == 0:
             return None
 
-        daily_rate = current_tot / today_day
-        # Linear extrapolation: scale by remaining fraction of month
-        linear   = current_tot / (today_day / tot_d)
-        # Hard cap: never let forecast exceed current + run-rate * 1.1 for remaining days
-        hard_cap = current_tot + days_rem * daily_rate * 1.1
+        df = inv_raw.copy()
+        df["_date"]   = pd.to_datetime(df.get("date", df.get("value_date","")), errors="coerce")
+        df["_month"]  = df["_date"].dt.strftime("%Y-%m")
+        df["_day"]    = df["_date"].dt.day
+        df["_total"]  = pd.to_numeric(df.get("total", 0), errors="coerce").fillna(0)
+        df["_status"] = df.get("status","").astype(str)
+        hist = df[(df["_status"]=="Verzonden") & (df["_month"] != CURRENT_MONTH)]
 
-        return round(min(linear, hard_cap)) + 20000
+        # ── Ceiling: max of last 3 completed months × 2.5 ──────────────────
+        hist_dedup = hist.drop_duplicates(subset=["invoice_id"]) if "invoice_id" in hist.columns else hist
+        past_months = sorted(hist_dedup["_month"].unique())
+        if past_months:
+            last3 = past_months[-3:]
+            past_totals = [hist_dedup[hist_dedup["_month"]==m]["_total"].sum() for m in last3]
+            ceiling = max(past_totals) * 2.5
+        else:
+            ceiling = 500_000  # fallback if no history at all
+
+        # ── Build empirical day-of-month shape ──────────────────────────────
+        day_weights: dict = {}
+        for m, mdf in hist.groupby("_month"):
+            mt = hist_dedup[hist_dedup["_month"]==m]["_total"].sum() if "invoice_id" in hist.columns else mdf["_total"].sum()
+            if mt <= 0: continue
+            for d, g in mdf.groupby("_day"):
+                day_weights[d] = day_weights.get(d, []) + [g["_total"].sum() / mt]
+
+        avg_day_frac = {d: float(np.mean(v)) for d, v in day_weights.items()}
+
+        if len(avg_day_frac) >= 5:
+            # Fraction of monthly revenue that historically lands in days 1..today
+            frac_elapsed = sum(avg_day_frac.get(d, 0.0) for d in range(1, today_day + 1))
+            frac_elapsed = max(frac_elapsed, 0.01)
+
+            if current_tot > 0:
+                shape_forecast  = current_tot / frac_elapsed
+                linear_forecast = current_tot / (today_day / tot_d)
+            else:
+                # Day 1 with €0: anchor on average of recent months so ceiling works
+                avg_past = sum(past_totals) / len(past_totals) if past_months else ceiling / 2.5
+                shape_forecast  = avg_past
+                linear_forecast = avg_past
+
+            # Blend: progress 0→1 shifts weight from shape to linear
+            progress = today_day / tot_d
+            blend = (1 - progress) * shape_forecast + progress * linear_forecast
+        else:
+            # Not enough historical shape data — fall back to linear + buffer
+            if current_tot <= 0:
+                return None
+            daily_rate = current_tot / today_day
+            linear     = current_tot / (today_day / tot_d)
+            hard_cap   = current_tot + days_rem * daily_rate * 1.1
+            blend      = min(linear, hard_cap) + 20_000
+
+        result = max(current_tot, min(blend, ceiling))
+        return round(result)
 
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
@@ -445,7 +497,7 @@ def fetch_vacancy_description(vacancy_id: str) -> str:
         text = " ".join(p for p in parts if p and str(p) not in ("None","null",""))
         text = _re.sub(r'<[^>]+>', ' ', text)
         text = _re.sub(r'\s+', ' ', text).strip()
-        return text[:500] + "…" if len(text) > 500 else text
+        return text[:900] + "…" if len(text) > 900 else text
     except Exception as e:
         print(f"[VAC_DESC] {vacancy_id}: {e}"); return ""
 
@@ -459,7 +511,7 @@ def load_vacancies():
         total_count = len(active)
 
         # Exclude internal/backoffice accounts and former employees
-        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice|birgit lucas|kristen snel", na=False)]
+        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice|birgit lucas|kristen snel|kirsten stel", na=False)]
         active = active.sort_values("creation_date", ascending=False)
         active["_owner_key"] = active["owner"].astype(str).str.strip().str.lower()
         one_per = active.drop_duplicates(subset=["_owner_key"], keep="first")
@@ -846,17 +898,14 @@ def render_screen():
         </div>""", unsafe_allow_html=True)
 
         instroom = p["op_gesprek"] + p["eerste_gesprek"] + p["aanbod"] + p["geplaatst"]
-        st.markdown(f"""<div class="fkpi" style="margin-bottom:1rem;text-align:center;">
-            <div class="fkpi-val" style="color:#ffffff">{instroom}</div>
-            <div class="fkpi-lbl">Instroom</div>
-        </div>""", unsafe_allow_html=True)
         kpis=[
-            ("Op Gesprek",      p["op_gesprek"],      "#00d4c8"),
+            ("Instroom",         instroom,             "#f5a623"),
+            ("Op Gesprek",       p["op_gesprek"],      "#00d4c8"),
             ("Gesprek Bij Klant",p["eerste_gesprek"],  "#e92076"),
-            ("Heeft Aanbod",    p["aanbod"],           "#a78bfa"),
-            ("Geplaatst ✓",     p["geplaatst"],        "#00e5a0"),
+            ("Heeft Aanbod",     p["aanbod"],          "#a78bfa"),
+            ("Geplaatst ✓",      p["geplaatst"],       "#00e5a0"),
         ]
-        cols=st.columns(4)
+        cols=st.columns(5)
         for col,(lbl,val,clr) in zip(cols,kpis):
             with col:
                 st.markdown(f"""<div class="fkpi">
@@ -975,7 +1024,7 @@ def render_screen():
                       <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{vno}</span>
                       <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{days_c};">⏱ {days_open} dagen open</span>
                     </div>
-                    {("<div style='font-size:0.82rem;color:rgba(255,255,255,0.45);line-height:1.6;'>" + intro + "</div>") if intro else ""}</div>
+                    {("<div style='font-size:0.82rem;color:rgba(255,255,255,0.45);line-height:1.6;max-height:200px;overflow:hidden;'>" + intro + "</div>") if intro else ""}</div>
                 </div>
                 <div class="dots">{dots}</div>
                 """, unsafe_allow_html=True)
