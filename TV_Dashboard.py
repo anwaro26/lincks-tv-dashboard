@@ -73,7 +73,7 @@ section[data-testid="stSidebar"]{display:none!important;}
   color:white;line-height:1.1;margin-bottom:0.6rem;}
 .vac-company{font-size:1rem;color:#00d4c8;font-weight:600;margin-bottom:0.5rem;}
 .vac-desc{font-size:0.82rem;color:rgba(255,255,255,0.4);line-height:1.6;
-  margin-bottom:1.2rem;max-height:60px;overflow:hidden;}
+  margin-bottom:1.2rem;max-height:120px;overflow:hidden;}
 .pills{display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;}
 .pill{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);
   border-radius:20px;padding:0.3rem 0.85rem;font-size:0.72rem;color:rgba(255,255,255,0.55);}
@@ -445,7 +445,7 @@ def fetch_vacancy_description(vacancy_id: str) -> str:
         text = " ".join(p for p in parts if p and str(p) not in ("None","null",""))
         text = _re.sub(r'<[^>]+>', ' ', text)
         text = _re.sub(r'\s+', ' ', text).strip()
-        return text[:250] + "…" if len(text) > 250 else text
+        return text[:500] + "…" if len(text) > 500 else text
     except Exception as e:
         print(f"[VAC_DESC] {vacancy_id}: {e}"); return ""
 
@@ -459,7 +459,7 @@ def load_vacancies():
         total_count = len(active)
 
         # Exclude internal/backoffice accounts and former employees
-        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice|birgit lucas", na=False)]
+        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice|birgit lucas|kristen snel", na=False)]
         active = active.sort_values("creation_date", ascending=False)
         active["_owner_key"] = active["owner"].astype(str).str.strip().str.lower()
         one_per = active.drop_duplicates(subset=["_owner_key"], keep="first")
@@ -542,7 +542,7 @@ now_t=_time.time()
 if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
     st.session_state["screen"]=(st.session_state["screen"]+1)%3
     st.session_state["last_sw"]=now_t
-if st.session_state["screen"]==2 and now_t-st.session_state["vac_ts"]>6:
+if st.session_state["screen"]==2 and now_t-st.session_state["vac_ts"]>4:
     st.session_state["vac_idx"]=(st.session_state["vac_idx"]+1)
     st.session_state["vac_ts"]=now_t
 
@@ -845,6 +845,11 @@ def render_screen():
             Kwartaal · {q_start} – {q_end}
         </div>""", unsafe_allow_html=True)
 
+        instroom = p["op_gesprek"] + p["eerste_gesprek"] + p["aanbod"] + p["geplaatst"]
+        st.markdown(f"""<div class="fkpi" style="margin-bottom:1rem;text-align:center;">
+            <div class="fkpi-val" style="color:#ffffff">{instroom}</div>
+            <div class="fkpi-lbl">Instroom</div>
+        </div>""", unsafe_allow_html=True)
         kpis=[
             ("Op Gesprek",      p["op_gesprek"],      "#00d4c8"),
             ("Gesprek Bij Klant",p["eerste_gesprek"],  "#e92076"),
@@ -863,9 +868,9 @@ def render_screen():
 
         cf,ct=st.columns([1.4,1])
         with cf:
-            lbls=["Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"]
-            vals=[p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
-            clrs=["#00d4c8","#e92076","#a78bfa","#00e5a0"]
+            lbls=["Instroom","Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"]
+            vals=[instroom,p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
+            clrs=["#ffffff","#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
                 connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
