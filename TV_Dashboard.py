@@ -128,7 +128,7 @@ ACTIVE_STATUSES = ["Actief1", "Actief2", "Actief - Startfee"]
 TARGETS = {
     "Mireille Prooi":0,"Renate Leeuwenstein":35000,"Annemieke Bakker":35000,
     "Arjan Huisman":35000,"Dico Cabout":31250,
-    "Sharon Kruijssen":31250,"Rick de Wit":15000,"Rick Wit":15000,
+    "Sharon Kruijssen":31250,"Rick Wit":15000,
     "Esther Moerman":16667,"Nina Harten":15000,
 }
 DEFAULT_TARGET = 31250
@@ -1035,7 +1035,7 @@ def render_screen():
                       <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{vno}</span>
                       <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{days_c};">⏱ {days_open} dagen open</span>
                     </div>
-                    {("<div style='font-size:0.82rem;color:rgba(255,255,255,0.45);line-height:1.6;max-height:200px;overflow:hidden;'>" + intro + "</div>") if intro else ""}</div>
+                    {("<div style='font-size:1rem;color:rgba(255,255,255,0.55);line-height:1.7;max-height:220px;overflow:hidden;'>" + intro + "</div>") if intro else ""}</div>
                 </div>
                 <div class="dots">{dots}</div>
                 """, unsafe_allow_html=True)
