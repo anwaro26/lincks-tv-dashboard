@@ -128,7 +128,7 @@ ACTIVE_STATUSES = ["Actief1", "Actief2", "Actief - Startfee"]
 TARGETS = {
     "Mireille Prooi":0,"Renate Leeuwenstein":35000,"Annemieke Bakker":35000,
     "Arjan Huisman":35000,"Dico Cabout":31250,
-    "Sharon Kruijssen":31250,"Rick de Wit":15000,
+    "Sharon Kruijssen":31250,"Rick de Wit":15000,"Rick Wit":15000,
     "Esther Moerman":16667,"Nina Harten":15000,
 }
 DEFAULT_TARGET = 31250
@@ -220,6 +220,9 @@ def compute_forecast(inv_raw, current_tot):
 
         avg_day_frac = {d: float(np.mean(v)) for d, v in day_weights.items()}
 
+        avg_past = (sum(past_totals) / len(past_totals)) if past_months else None
+        progress = today_day / tot_d
+
         if len(avg_day_frac) >= 5:
             # Fraction of monthly revenue that historically lands in days 1..today
             frac_elapsed = sum(avg_day_frac.get(d, 0.0) for d in range(1, today_day + 1))
@@ -229,22 +232,30 @@ def compute_forecast(inv_raw, current_tot):
                 shape_forecast  = current_tot / frac_elapsed
                 linear_forecast = current_tot / (today_day / tot_d)
             else:
-                # Day 1 with €0: anchor on average of recent months so ceiling works
-                avg_past = sum(past_totals) / len(past_totals) if past_months else ceiling / 2.5
-                shape_forecast  = avg_past
-                linear_forecast = avg_past
+                # Day 1 with €0: anchor on average of recent months
+                shape_forecast  = avg_past or (ceiling / 2.5)
+                linear_forecast = shape_forecast
 
-            # Blend: progress 0→1 shifts weight from shape to linear
-            progress = today_day / tot_d
-            blend = (1 - progress) * shape_forecast + progress * linear_forecast
+            # Shape + linear blend (progress² keeps shape dominant until ~day 20)
+            shape_blend = (1 - progress**2) * shape_forecast + progress**2 * linear_forecast
         else:
-            # Not enough historical shape data — fall back to linear + buffer
+            # Not enough shape data
             if current_tot <= 0:
-                return None
-            daily_rate = current_tot / today_day
-            linear     = current_tot / (today_day / tot_d)
-            hard_cap   = current_tot + days_rem * daily_rate * 1.1
-            blend      = min(linear, hard_cap) + 20_000
+                shape_blend = avg_past or None
+                if shape_blend is None: return None
+            else:
+                linear_forecast = current_tot / (today_day / tot_d)
+                shape_blend = linear_forecast
+
+        # ── History anchor: early in month trust historical average heavily ──
+        # Prevents collapse to unrealistically low values when mid-month pace is slow
+        # but end-of-month billing hasn't started yet.
+        # Uses progress² so the anchor dominates days 1-20, fades out by day 28.
+        if avg_past and avg_past > 0:
+            avg_anchored = (1 - progress**2) * avg_past + progress**2 * (current_tot / (today_day / tot_d) if current_tot > 0 else avg_past)
+            blend = max(shape_blend, avg_anchored)
+        else:
+            blend = shape_blend
 
         result = max(current_tot, min(blend, ceiling))
         return round(result)
@@ -919,7 +930,7 @@ def render_screen():
         with cf:
             lbls=["Instroom","Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"]
             vals=[instroom,p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
-            clrs=["#ffffff","#00d4c8","#e92076","#a78bfa","#00e5a0"]
+            clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
                 connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
@@ -1004,7 +1015,7 @@ def render_screen():
 
             st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
-            cm,cl=st.columns([1.7,1])
+            cm,cl=st.columns([2.5,1])
             with cm:
                 st.markdown(f"""
                 <div class="vac-big">
