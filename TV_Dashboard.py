@@ -458,8 +458,8 @@ def load_vacancies():
         active = active[active["job_title"].notna() & ~active["job_title"].isin(["--","None","nan",""])]
         total_count = len(active)
 
-        # Exclude internal/backoffice accounts
-        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice", na=False)]
+        # Exclude internal/backoffice accounts and former employees
+        active = active[~active["owner"].astype(str).str.lower().str.contains("backoffice|lincks backoffice|birgit lucas", na=False)]
         active = active.sort_values("creation_date", ascending=False)
         active["_owner_key"] = active["owner"].astype(str).str.strip().str.lower()
         one_per = active.drop_duplicates(subset=["_owner_key"], keep="first")
@@ -847,7 +847,7 @@ def render_screen():
 
         kpis=[
             ("Op Gesprek",      p["op_gesprek"],      "#00d4c8"),
-            ("1e Gesprek Klant",p["eerste_gesprek"],  "#e92076"),
+            ("Gesprek Bij Klant",p["eerste_gesprek"],  "#e92076"),
             ("Heeft Aanbod",    p["aanbod"],           "#a78bfa"),
             ("Geplaatst ✓",     p["geplaatst"],        "#00e5a0"),
         ]
@@ -863,7 +863,7 @@ def render_screen():
 
         cf,ct=st.columns([1.4,1])
         with cf:
-            lbls=["Op Gesprek","1e Gesprek Klant","Aanbod","Geplaatst"]
+            lbls=["Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"]
             vals=[p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
             clrs=["#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
