@@ -820,6 +820,7 @@ def render_screen():
                     return DEFAULT_TARGET
                 rc=excl.groupby("consultant")["revenue"].sum().reset_index()
                 rc["t"]=rc["consultant"].apply(get_t)
+                rc["t"]=pd.to_numeric(rc["t"],errors="coerce").fillna(DEFAULT_TARGET).astype(float)
                 rc["p"]=(rc["revenue"]/rc["t"]*100).round(1)
                 rc["r"]=(rc["t"]-rc["revenue"]).clip(lower=0)
                 rc=rc.sort_values("revenue",ascending=True)
