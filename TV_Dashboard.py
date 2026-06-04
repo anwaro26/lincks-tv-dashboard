@@ -174,91 +174,125 @@ def total_days():
 
 def compute_forecast(inv_raw, current_tot):
     """
-    Shape-based + momentum blend forecast.
-    - Builds empirical day-of-month shape from all historical invoices
-    - Shape forecast: current_tot / fraction_of_month_already_elapsed
-    - Linear forecast: simple daily-rate extrapolation
-    - Blend: early in month weight shape more, late in month weight linear more
-    - Ceiling: max of last 3 completed months × 2.5  (never collapses on day 1)
-    - Floor: current_tot (never forecast less than what's already booked)
+    AR(3) + multiplicative seasonality + intramonth CDF blend.
+
+    Components:
+      1. AR(3) baseline  — OLS fit on monthly totals; gives a historically-grounded
+                           anchor independent of how the current month started.
+      2. Seasonal factor — ratio of same-calendar-month historical average vs overall
+                           monthly average; adjusts for May being stronger/weaker.
+      3. Intramonth CDF  — empirical median fraction received by day D across historical
+                           months.  Captures the end-of-month invoice rush: day 7 might
+                           historically represent only ~10% of a month, so we don't
+                           extrapolate linearly.
+      4. Blend           — early in month: AR(3) dominates (actual data is scarce);
+                           late in month: intramonth CDF dominates (we can see the shape).
     """
     try:
-        today_day = nl_now().day
-        tot_d     = total_days()
-        days_rem  = days_remaining()
-
-        if days_rem <= 3:
-            return current_tot
-        if today_day == 0:
-            return None
+        today_day  = nl_now().day
+        cal_month  = nl_now().month
+        days_rem   = days_remaining()
+        tot_d      = total_days()
+        progress   = today_day / tot_d          # 0..1
 
         df = inv_raw.copy()
-        df["_date"]   = pd.to_datetime(df.get("date", df.get("value_date","")), errors="coerce")
-        df["_month"]  = df["_date"].dt.strftime("%Y-%m")
-        df["_day"]    = df["_date"].dt.day
-        df["_total"]  = pd.to_numeric(df.get("total", 0), errors="coerce").fillna(0)
-        df["_status"] = df.get("status","").astype(str)
-        hist = df[(df["_status"]=="Verzonden") & (df["_month"] != CURRENT_MONTH)]
+        df["_date"]  = pd.to_datetime(df.get("date", df.get("value_date", "")), errors="coerce")
+        df = df[df["_date"].notna()].copy()
+        df["_month"] = df["_date"].dt.strftime("%Y-%m")
+        df["_day"]   = df["_date"].dt.day
+        df["_total"] = pd.to_numeric(df.get("total", 0), errors="coerce").fillna(0)
+        df["_status"]= df.get("status", "").astype(str)
+        hist = df[(df["_status"] == "Verzonden") & (df["_month"] != CURRENT_MONTH)]
+        if hist.empty: return None
 
-        # ── Ceiling: max of last 3 completed months × 2.5 ──────────────────
-        hist_dedup = hist.drop_duplicates(subset=["invoice_id"]) if "invoice_id" in hist.columns else hist
-        past_months = sorted(hist_dedup["_month"].unique())
-        if past_months:
-            last3 = past_months[-3:]
-            past_totals = [hist_dedup[hist_dedup["_month"]==m]["_total"].sum() for m in last3]
-            ceiling = max(past_totals) * 2.5
+        # ── 1.  Monthly totals sorted chronologically ─────────────────────────
+        monthly = hist.groupby("_month")["_total"].sum().sort_index()
+        months  = list(monthly.index)
+        totals  = list(monthly.values)
+        if len(totals) < 2: return None
+
+        # ── 2.  AR(3) via OLS (fall back to weighted mean if too few months) ──
+        ar3_pred = None
+        if len(totals) >= 5:
+            p = min(3, len(totals) - 2)          # lags actually used
+            X, y = [], []
+            for i in range(p, len(totals)):
+                X.append([1.0] + [totals[i-k] for k in range(1, p+1)])
+                y.append(totals[i])
+            X, y = np.array(X), np.array(y)
+            try:
+                coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
+                ar3_pred = coeffs[0] + sum(coeffs[k+1] * totals[-(k+1)] for k in range(p))
+                ar3_pred = max(ar3_pred, 0)
+            except Exception:
+                pass
+
+        if ar3_pred is None:
+            # Weighted average of last 3 months as fallback
+            w = np.array([0.5, 0.3, 0.2][:len(totals)])
+            w /= w.sum()
+            ar3_pred = float(np.dot(w, totals[-len(w):]))
+
+        # ── 3.  Seasonal multiplier ───────────────────────────────────────────
+        same_cal   = [t for m, t in zip(months, totals) if int(m.split("-")[1]) == cal_month]
+        overall_avg= np.mean(totals)
+        if same_cal and overall_avg > 0:
+            seasonal = np.mean(same_cal) / overall_avg
+            seasonal = np.clip(seasonal, 0.5, 2.0)   # guard against outliers
         else:
-            ceiling = 500_000  # fallback if no history at all
+            seasonal = 1.0
 
-        # ── Build empirical day-of-month shape ──────────────────────────────
-        day_weights: dict = {}
-        for m, mdf in hist.groupby("_month"):
-            mt = hist_dedup[hist_dedup["_month"]==m]["_total"].sum() if "invoice_id" in hist.columns else mdf["_total"].sum()
+        ar3_seasonal = ar3_pred * seasonal
+
+        # ── 4.  Intramonth CDF extrapolation ─────────────────────────────────
+        # For each historical month collect: fraction of total revenue received by day D.
+        # Weighting: same calendar-month counts double (stronger seasonal signal).
+        fracs = []
+        weights = []
+        for m in monthly.index:
+            mdf = hist[hist["_month"] == m]
+            mt  = mdf["_total"].sum()
             if mt <= 0: continue
-            for d, g in mdf.groupby("_day"):
-                day_weights[d] = day_weights.get(d, []) + [g["_total"].sum() / mt]
+            frac = mdf[mdf["_day"] <= today_day]["_total"].sum() / mt
+            if not (0 < frac <= 1): continue
+            w = 2.0 if int(m.split("-")[1]) == cal_month else 1.0
+            fracs.append(frac)
+            weights.append(w)
 
-        avg_day_frac = {d: float(np.mean(v)) for d, v in day_weights.items()}
+        intra_pred = None
+        if fracs:
+            # Weighted median (more robust than mean for skewed end-of-month distributions)
+            fracs_arr   = np.array(fracs)
+            weights_arr = np.array(weights) / np.sum(weights)
+            sorted_idx  = np.argsort(fracs_arr)
+            csw = np.cumsum(weights_arr[sorted_idx])
+            median_frac = float(fracs_arr[sorted_idx[np.searchsorted(csw, 0.5)]])
+            if median_frac > 0.02:
+                intra_pred = current_tot / median_frac
 
-        avg_past = (sum(past_totals) / len(past_totals)) if past_months else None
-        progress = today_day / tot_d
-
-        if len(avg_day_frac) >= 5:
-            # Fraction of monthly revenue that historically lands in days 1..today
-            frac_elapsed = sum(avg_day_frac.get(d, 0.0) for d in range(1, today_day + 1))
-            frac_elapsed = max(frac_elapsed, 0.01)
-
-            if current_tot > 0:
-                shape_forecast  = current_tot / frac_elapsed
-                linear_forecast = current_tot / (today_day / tot_d)
-            else:
-                # Day 1 with €0: anchor on average of recent months
-                shape_forecast  = avg_past or (ceiling / 2.5)
-                linear_forecast = shape_forecast
-
-            # Shape + linear blend (progress² keeps shape dominant until ~day 20)
-            shape_blend = (1 - progress**2) * shape_forecast + progress**2 * linear_forecast
+        # ── 5.  Blend AR(3) + intramonth ─────────────────────────────────────
+        # Early in month (day 1-7): AR(3)+seasonality dominates because we have little
+        # actual data and the first few days are noisy.
+        # Late in month (day 20+): intramonth CDF is reliable; trust it more.
+        if intra_pred is not None and ar3_seasonal > 0:
+            intra_w = np.clip(0.15 + progress * 0.85, 0.15, 0.9)
+            ar3_w   = 1.0 - intra_w
+            blended = ar3_w * ar3_seasonal + intra_w * intra_pred
+        elif intra_pred is not None:
+            blended = intra_pred
         else:
-            # Not enough shape data
-            if current_tot <= 0:
-                shape_blend = avg_past or None
-                if shape_blend is None: return None
-            else:
-                linear_forecast = current_tot / (today_day / tot_d)
-                shape_blend = linear_forecast
+            blended = ar3_seasonal
 
-        # ── History anchor: early in month trust historical average heavily ──
-        # Prevents collapse to unrealistically low values when mid-month pace is slow
-        # but end-of-month billing hasn't started yet.
-        # Uses progress² so the anchor dominates days 1-20, fades out by day 28.
-        if avg_past and avg_past > 0:
-            avg_anchored = (1 - progress**2) * avg_past + progress**2 * (current_tot / (today_day / tot_d) if current_tot > 0 else avg_past)
-            blend = max(shape_blend, avg_anchored)
-        else:
-            blend = shape_blend
+        # ── 6.  Sanity bounds ─────────────────────────────────────────────────
+        if days_rem <= 3:
+            return round(current_tot * (1 + 0.008 * days_rem))
 
-        result = max(current_tot, min(blend, ceiling))
-        return round(result)
+        hist_p90   = np.percentile(totals, 90) if totals else COMPANY_TARGET
+        max_cap    = max(current_tot, min(hist_p90 * 1.3,
+                         current_tot + (days_rem / tot_d) * COMPANY_TARGET))
+        blended    = np.clip(blended, current_tot, max_cap)
+
+        return round(blended)
 
     except Exception as e:
         print(f"[FORECAST] {e}"); return None
@@ -599,7 +633,7 @@ if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
 if "vac_ts"  not in st.session_state: st.session_state["vac_ts"]=_time.time()
 
 # Auto-rerun every 10s so the 60s screen-switch and 6s vacancy-cycle checks fire on time
-st_autorefresh(interval=60_000, limit=None, key="tv_autorefresh")
+st_autorefresh(interval=10_000, limit=None, key="tv_autorefresh")
 
 now_t=_time.time()
 if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
