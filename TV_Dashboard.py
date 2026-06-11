@@ -22,43 +22,43 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@300;400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-html,body,[class*="css"]{font-family:'Inter',sans-serif;background:#080614;color:white;}
-.stApp,[data-testid="stAppViewContainer"]{background:#080614;}
+html,body,[class*="css"]{font-family:'Inter',sans-serif;background:#180329;color:white;}
+.stApp,[data-testid="stAppViewContainer"]{background:#180329;}
 .block-container{padding:0!important;max-width:100%!important;}
 footer,#MainMenu,header,[data-testid="collapsedControl"]{display:none!important;}
 section[data-testid="stSidebar"]{display:none!important;}
 .stApp::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
-  background-image:linear-gradient(rgba(233,32,118,0.03) 1px,transparent 1px),
-  linear-gradient(90deg,rgba(233,32,118,0.03) 1px,transparent 1px);
+  background-image:linear-gradient(rgba(233,32,118,0.04) 1px,transparent 1px),
+  linear-gradient(90deg,rgba(233,32,118,0.04) 1px,transparent 1px);
   background-size:60px 60px;pointer-events:none;z-index:0;}
 .wrap{position:relative;z-index:1;padding:1.8rem 2.5rem 1rem;}
 .hdr{display:flex;align-items:center;margin-bottom:1.5rem;}
 .hdr-left{display:flex;align-items:center;gap:1.2rem;}
 .hdr-badge{background:#e92076;color:white;font-size:0.55rem;font-weight:700;
   letter-spacing:3px;padding:0.25rem 0.7rem;border-radius:3px;text-transform:uppercase;}
-.divider{height:1px;background:rgba(255,255,255,0.06);margin-bottom:1.2rem;}
-.card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);
+.divider{height:1px;background:rgba(233,32,118,0.15);margin-bottom:1.2rem;}
+.card{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
   border-radius:14px;padding:1.5rem;position:relative;overflow:hidden;}
-.card-top{position:absolute;top:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,#e92076,transparent);}
-.card-label{font-size:0.58rem;font-weight:600;color:rgba(255,255,255,0.25);
+.card-top{position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#e92076,#63ccca);}
+.card-label{font-size:0.58rem;font-weight:600;color:rgba(255,255,255,0.5);
   text-transform:uppercase;letter-spacing:3px;margin-bottom:0.7rem;}
 .card-val{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;line-height:1;}
 .pink{color:#e92076;}.teal{color:#00d4c8;}.green{color:#00e5a0;}.orange{color:#f5a623;}
-.card-sub{font-size:0.7rem;color:rgba(255,255,255,0.25);margin-top:0.5rem;}
-.prog{height:2px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:1rem;overflow:hidden;}
-.prog-fill{height:100%;background:linear-gradient(90deg,#e92076,#ff6ab0);border-radius:2px;}
-.fkpi{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+.card-sub{font-size:0.7rem;color:rgba(255,255,255,0.35);margin-top:0.5rem;}
+.prog{height:3px;background:rgba(255,255,255,0.08);border-radius:2px;margin-top:1rem;overflow:hidden;}
+.prog-fill{height:100%;background:linear-gradient(90deg,#e92076,#63ccca);border-radius:2px;}
+.fkpi{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
   border-radius:12px;padding:1.5rem 1rem;text-align:center;}
 .fkpi-val{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;line-height:1;}
-.fkpi-lbl{font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:2px;
+.fkpi-lbl{font-size:0.58rem;color:rgba(255,255,255,0.5);letter-spacing:2px;
   text-transform:uppercase;margin-top:0.5rem;}
 
 /* Vacancy carousel */
 .vac-stage{position:relative;width:100%;overflow:hidden;border-radius:18px;}
 .vac-big{
-  background:linear-gradient(145deg,#150330 0%,#220844 60%,#1a0535 100%);
-  border:1px solid rgba(233,32,118,0.25);border-radius:18px;
+  background:linear-gradient(145deg,#1e0535 0%,#2a0845 60%,#180329 100%);
+  border:1px solid rgba(233,32,118,0.3);border-radius:18px;
   padding:2.2rem 2.5rem;position:relative;overflow:hidden;min-height:340px;
   animation:slidein 0.4s cubic-bezier(0.4,0,0.2,1);
 }
@@ -84,29 +84,29 @@ section[data-testid="stSidebar"]{display:none!important;}
 .dot.on{background:#e92076;width:18px;border-radius:3px;}
 
 /* Vacancy list */
-.vac-sm{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);
-  border-left:2px solid rgba(233,32,118,0.3);border-radius:8px;
+.vac-sm{background:rgba(42,8,69,0.5);border:1px solid rgba(233,32,118,0.15);
+  border-left:2px solid rgba(233,32,118,0.4);border-radius:8px;
   padding:0.65rem 0.9rem;margin-bottom:0.4rem;}
-.vac-sm.cur{border-left-color:#00d4c8;background:rgba(0,212,200,0.03);}
+.vac-sm.cur{border-left-color:#63ccca;background:rgba(99,204,202,0.05);}
 .vac-sm-t{font-size:0.8rem;font-weight:600;color:white;margin-bottom:0.1rem;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.vac-sm-c{font-size:0.65rem;color:rgba(255,255,255,0.28);}
+.vac-sm-c{font-size:0.65rem;color:rgba(255,255,255,0.4);}
 
 /* Nav tabs */
 .nav-tabs{display:flex;gap:0.4rem;margin-bottom:1.4rem;align-items:center;}
 .stButton>button{
-  background:transparent!important;color:rgba(255,255,255,0.28)!important;
-  border:1px solid rgba(255,255,255,0.07)!important;border-radius:6px!important;
+  background:rgba(42,8,69,0.6)!important;color:rgba(255,255,255,0.4)!important;
+  border:1px solid rgba(233,32,118,0.2)!important;border-radius:6px!important;
   font-size:0.62rem!important;letter-spacing:2px!important;text-transform:uppercase!important;
   font-weight:500!important;padding:0.3rem 0.75rem!important;transition:all 0.15s!important;
 }
 .stButton>button:hover{
-  background:rgba(233,32,118,0.08)!important;
-  border-color:rgba(233,32,118,0.2)!important;
-  color:rgba(255,255,255,0.6)!important;
+  background:rgba(233,32,118,0.15)!important;
+  border-color:rgba(233,32,118,0.4)!important;
+  color:white!important;
 }
-.stSelectbox>div>div{background:rgba(255,255,255,0.04)!important;
-  border:1px solid rgba(255,255,255,0.08)!important;color:white!important;
+.stSelectbox>div>div{background:#2a0845!important;
+  border:1px solid rgba(233,32,118,0.3)!important;color:white!important;
   border-radius:8px!important;font-size:0.8rem!important;}
 </style>
 <meta http-equiv="refresh" content="7200">
