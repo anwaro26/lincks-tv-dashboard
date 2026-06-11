@@ -982,15 +982,32 @@ tickClock();setInterval(tickClock,1000);
 
 var curScr=0,lastSw=Date.now(),vacIdx=0,vacLastSw=Date.now();
 """ + f"var numVacs={_num_vacs};" + """
+function resizeCharts(screenEl){
+  if(!window.Plotly||!screenEl)return;
+  setTimeout(function(){
+    screenEl.querySelectorAll('.plotly-graph-div').forEach(function(el){
+      try{Plotly.Plots.resize(el);}catch(e){}
+    });
+  },50);
+}
 function switchScreen(n,manual){
-  document.querySelectorAll('.tv-screen').forEach(function(el,i){el.style.display=i===n?'':'none';});
+  var screens=document.querySelectorAll('.tv-screen');
+  screens.forEach(function(el,i){el.style.display=i===n?'':'none';});
   document.querySelectorAll('.tv-nav-btn').forEach(function(el,i){
     el.style.background=i===n?'rgba(233,32,118,0.2)':'rgba(42,8,69,0.6)';
     el.style.color=i===n?'white':'rgba(255,255,255,0.4)';
     el.style.borderColor=i===n?'rgba(233,32,118,0.5)':'rgba(233,32,118,0.2)';
   });
+  resizeCharts(screens[n]);
   curScr=n;if(manual)lastSw=Date.now();
 }
+window.addEventListener('load',function(){
+  setTimeout(function(){
+    document.querySelectorAll('.plotly-graph-div').forEach(function(el){
+      try{if(window.Plotly)Plotly.Plots.resize(el);}catch(e){}
+    });
+  },300);
+});
 function showVac(i){
   if(numVacs===0)return;
   document.querySelectorAll('.vac-card').forEach(function(el,j){el.style.display=j===i?'block':'none';});
@@ -1010,6 +1027,8 @@ _iframe_css = """
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@300;400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{font-family:'Inter',sans-serif;background:#180329;color:white;overflow:hidden;}
+body{animation:fadein 0.35s ease-in;}
+@keyframes fadein{from{opacity:0;}to{opacity:1;}}
 body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
   background-image:linear-gradient(rgba(233,32,118,0.04) 1px,transparent 1px),
   linear-gradient(90deg,rgba(233,32,118,0.04) 1px,transparent 1px);
