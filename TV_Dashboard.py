@@ -31,12 +31,12 @@ section[data-testid="stSidebar"]{display:none!important;}
   background-image:linear-gradient(rgba(233,32,118,0.04) 1px,transparent 1px),
   linear-gradient(90deg,rgba(233,32,118,0.04) 1px,transparent 1px);
   background-size:60px 60px;pointer-events:none;z-index:0;}
-.wrap{position:relative;z-index:1;padding:1.8rem 2.5rem 1rem;}
-.hdr{display:flex;align-items:center;margin-bottom:1.5rem;}
+.wrap{position:relative;z-index:1;padding:0.9rem 2.5rem 1rem;}
+.hdr{display:flex;align-items:center;margin-bottom:0.7rem;}
 .hdr-left{display:flex;align-items:center;gap:1.2rem;}
 .hdr-badge{background:#e92076;color:white;font-size:0.55rem;font-weight:700;
   letter-spacing:3px;padding:0.25rem 0.7rem;border-radius:3px;text-transform:uppercase;}
-.divider{height:1px;background:rgba(233,32,118,0.15);margin-bottom:1.2rem;}
+.divider{height:1px;background:rgba(233,32,118,0.15);margin-bottom:0.6rem;}
 .card{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
   border-radius:14px;padding:1.5rem;position:relative;overflow:hidden;}
 .card-top{position:absolute;top:0;left:0;right:0;height:3px;
@@ -688,7 +688,7 @@ with hc2:
         document.getElementById('d').textContent=d.toUpperCase();
     }
     tick();setInterval(tick,1000);
-    </script></body></html>""", height=80, scrolling=False)
+    </script></body></html>""", height=58, scrolling=False)
 
 st.markdown('<div class="divider" style="margin-top:0.5rem"></div>', unsafe_allow_html=True)
 
