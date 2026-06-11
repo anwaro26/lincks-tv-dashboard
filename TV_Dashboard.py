@@ -758,8 +758,10 @@ def render_screen():
 
         st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
+        _title_style="font-size:0.58rem;font-weight:600;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:3px;margin-bottom:0.3rem;border-left:3px solid #e92076;padding-left:0.6rem;"
         cd,cb=st.columns([1,2.2])
         with cd:
+            st.markdown(f"<div style='{_title_style}'>Maandtarget</div>", unsafe_allow_html=True)
             fig=go.Figure(go.Pie(values=[tot,rem],labels=["Behaald","Resterend"],
                 hole=0.8,sort=False,textinfo="none",
                 marker_colors=["#e92076","rgba(255,255,255,0.04)"],
@@ -775,6 +777,7 @@ def render_screen():
             st.plotly_chart(fig,use_container_width=True)
 
         with cb:
+            st.markdown(f"<div style='{_title_style}'>Omzetprogressie</div>", unsafe_allow_html=True)
             # Revenue chart with forecast line
             if daily_days and daily_rev:
                 all_days=list(range(1,tot_days+1))
@@ -879,7 +882,7 @@ def render_screen():
                 st.plotly_chart(fig2,use_container_width=True)
 
         # Recruiter bar always shown below
-        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='{_title_style}'>Omzet per Recruiter</div>", unsafe_allow_html=True)
         rc_df = df_cur[df_cur["consultant"] != "Mireille Prooi"].groupby("consultant")["revenue"].sum().reset_index()
         def get_target_bar(name):
             if name in TARGETS: return TARGETS[name]
