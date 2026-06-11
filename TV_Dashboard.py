@@ -24,6 +24,8 @@ st.markdown("""
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body,[class*="css"]{font-family:'Inter',sans-serif;background:#180329;color:white;}
 .stApp,[data-testid="stAppViewContainer"]{background:#180329;}
+.stApp{animation:fadein 0.35s ease-in;}
+@keyframes fadein{from{opacity:0;}to{opacity:1;}}
 .block-container{padding:0!important;max-width:100%!important;}
 footer,#MainMenu,header,[data-testid="collapsedControl"]{display:none!important;}
 section[data-testid="stSidebar"]{display:none!important;}
