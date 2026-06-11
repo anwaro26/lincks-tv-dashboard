@@ -625,10 +625,23 @@ tot_days=total_days()
 # (cached function used non-deduped daily_rev which double-counts split invoices)
 forecast=compute_forecast(pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet")), tot)
 
-# ── Data refresh only — screen/vacancy switching fully in JavaScript ──────────
-st_autorefresh(interval=300_000, limit=None, key="tv_autorefresh")
+# ── State ─────────────────────────────────────────────────────────────────────
+if "screen"  not in st.session_state: st.session_state["screen"]=0
+if "vac_idx" not in st.session_state: st.session_state["vac_idx"]=0
+if "locked"  not in st.session_state: st.session_state["locked"]=False
+if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
+if "vac_ts"  not in st.session_state: st.session_state["vac_ts"]=_time.time()
 
-import plotly.io as pio
+# Auto-rerun every 10s so the 60s screen-switch and 6s vacancy-cycle checks fire on time
+st_autorefresh(interval=10_000, limit=None, key="tv_autorefresh")
+
+now_t=_time.time()
+if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
+    st.session_state["screen"]=(st.session_state["screen"]+1)%3
+    st.session_state["last_sw"]=now_t
+if st.session_state["screen"]==2 and now_t-st.session_state["vac_ts"]>4:
+    st.session_state["vac_idx"]=(st.session_state["vac_idx"]+1)
+    st.session_state["vac_ts"]=now_t
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 logo_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"lincks_logo_fc-wit_def.png")
@@ -638,479 +651,469 @@ if os.path.exists(logo_path):
 else:
     logo_html='<span style="font-family:Syne,sans-serif;font-size:1.4rem;font-weight:800;">LINCKS</span>'
 
-# ── Helper: smart sentence-aware truncation ───────────────────────────────────
-def smart_truncate(text, max_chars=650):
-    if not text or len(text) <= max_chars:
-        return text
-    chunk = text[:max_chars]
-    last_end = max(chunk.rfind('.'), chunk.rfind('!'), chunk.rfind('?'))
-    if last_end > max_chars // 3:
-        return chunk[:last_end + 1]
-    last_space = chunk.rfind(' ')
-    return (chunk[:last_space] + '…') if last_space > 0 else chunk + '…'
+scr=st.session_state["screen"]
 
-# ── Helper: figure → embeddable HTML ─────────────────────────────────────────
-_plotly_loaded = False
-def ch(fig):
-    global _plotly_loaded
-    js = 'cdn' if not _plotly_loaded else False
-    _plotly_loaded = True
-    return pio.to_html(fig, full_html=False, include_plotlyjs=js,
-                       config={'responsive': True, 'displayModeBar': False})
+st.markdown('<div class="wrap">', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════
-# BUILD SCREEN 0 — OMZET
-# ══════════════════════════════════════════════════════
-dc = "#00e5a0" if days_rem<=3 else "#f5a623" if days_rem<=7 else "#00d4c8"
-if forecast and forecast > 0:
-    fp = min(forecast / COMPANY_TARGET * 100, 150)
-    fc = "#00e5a0" if fp>=100 else "#f5a623" if fp>=80 else "#e92076"
-    ft = f"€{forecast:,.0f}"
-    fs = f"{fp:.0f}% van target · historisch dagpatroon"
-else:
-    fc = "rgba(255,255,255,0.25)"; ft = "—"; fs = "onvoldoende data"
+# ── Header ────────────────────────────────────────────────────────────────────
+hc1,hc2=st.columns([3,1])
+with hc1:
+    st.markdown(f"""<div class="hdr">
+        <div class="hdr-left">
+            {logo_html}
+            <span class="hdr-badge">Live · {CURRENT_MONTH}</span>
+        </div>
+    </div>""", unsafe_allow_html=True)
+with hc2:
+    components.html("""<!DOCTYPE html><html><head>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&family=Inter:wght@500&display=swap" rel="stylesheet">
+    <style>
+    *{margin:0;padding:0;box-sizing:border-box;}body{background:transparent;overflow:hidden;}
+    #w{text-align:right;padding:0.2rem 0;}
+    #c{font-family:'Syne','Arial Black',sans-serif;font-size:2.6rem;font-weight:800;
+       color:#e92076;line-height:1;letter-spacing:-1px;text-shadow:0 0 30px rgba(233,32,118,0.4);}
+    #d{font-family:'Inter',sans-serif;font-size:0.58rem;color:rgba(255,255,255,0.22);
+       letter-spacing:3px;text-transform:uppercase;margin-top:3px;}
+    </style></head><body><div id="w"><div id="c">--:--:--</div><div id="d">--</div></div>
+    <script>
+    var D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
+    var M=['januari','februari','maart','april','mei','juni','juli','augustus',
+           'september','oktober','november','december'];
+    function getNL(){return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"}));}
+    function tick(){
+        var n=getNL();
+        var c=('0'+n.getHours()).slice(-2)+':'+('0'+n.getMinutes()).slice(-2)+':'+('0'+n.getSeconds()).slice(-2);
+        var d=D[n.getDay()]+' '+n.getDate()+' '+M[n.getMonth()]+' '+n.getFullYear();
+        document.getElementById('c').textContent=c;
+        document.getElementById('d').textContent=d.toUpperCase();
+    }
+    tick();setInterval(tick,1000);
+    </script></body></html>""", height=58, scrolling=False)
 
-# Donut
-_fig_donut = go.Figure(go.Pie(values=[tot,rem], labels=["Behaald","Resterend"],
-    hole=0.8, sort=False, textinfo="none",
-    marker_colors=["#e92076","rgba(255,255,255,0.04)"], marker=dict(line=dict(width=0))))
-_fig_donut.add_annotation(text=f"<b>{pct:.0f}%</b>", x=0.5, y=0.58,
-    font=dict(size=56, color="#e92076", family="Syne"), showarrow=False)
-_fig_donut.add_annotation(text=f"€{tot:,.0f}", x=0.5, y=0.40,
-    font=dict(size=15, color="rgba(255,255,255,0.6)"), showarrow=False)
-_fig_donut.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}", x=0.5, y=0.27,
-    font=dict(size=10, color="rgba(255,255,255,0.22)"), showarrow=False)
-_fig_donut.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    showlegend=False, margin=dict(l=10,r=10,t=10,b=10), height=220, autosize=True)
-_donut_h = ch(_fig_donut)
+st.markdown('<div class="divider" style="margin-top:0.5rem"></div>', unsafe_allow_html=True)
 
-# Revenue / forecast line or fallback bar
-if daily_days and daily_rev:
-    act_x=daily_days; act_y=daily_rev
-    fc_x, fc_y = [], []
-    if forecast and len(act_y) > 0:
-        inv_raw_fc = pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet"))
-        last_day = daily_days[-1]; last_val = act_y[-1]
-        if tot_days - last_day > 0:
-            hist_df = inv_raw_fc.copy()
-            hist_df["_date"]  = pd.to_datetime(hist_df.get("date", hist_df.get("value_date","")), errors="coerce")
-            hist_df["_month"] = hist_df["_date"].dt.strftime("%Y-%m")
-            hist_df["_day"]   = hist_df["_date"].dt.day
-            hist_df["_total"] = pd.to_numeric(hist_df.get("total",0), errors="coerce").fillna(0)
-            hist_df["_status"]= hist_df.get("status","").astype(str)
-            hist_past = hist_df[(hist_df["_status"]=="Verzonden") & (hist_df["_month"]!=CURRENT_MONTH)]
-            day_weights = {}
-            for _m in hist_past["_month"].unique():
-                _mdf = hist_past[hist_past["_month"]==_m]; _mt = _mdf["_total"].sum()
-                if _mt <= 0: continue
-                for _d, _g in _mdf.groupby("_day"):
-                    day_weights[_d] = day_weights.get(_d, []) + [_g["_total"].sum() / _mt]
-            avg_day_frac = {_d: float(np.mean(_v)) for _d, _v in day_weights.items()}
-            future_days = list(range(last_day+1, tot_days+1))
-            raw_w = [avg_day_frac.get(_d, 0.001) for _d in future_days]
-            total_rem_frac = sum(raw_w) if sum(raw_w) > 0 else 1
-            cumulative = last_val; fc_x = [last_day]; fc_y = [last_val]
-            for _i, _d in enumerate(future_days):
-                cumulative += (forecast - last_val) * (raw_w[_i] / total_rem_frac)
-                fc_x.append(_d); fc_y.append(round(cumulative))
-    _fig_rev = go.Figure()
-    _fig_rev.add_trace(go.Scatter(x=act_x, y=act_y, mode="lines", name="Werkelijk",
-        line=dict(color="#e92076", width=3), fill="tozeroy", fillcolor="rgba(233,32,118,0.08)"))
-    if fc_x:
-        _fig_rev.add_trace(go.Scatter(x=fc_x, y=fc_y, mode="lines", name="Verwachting",
-            line=dict(color="#f5a623", width=2, dash="dot")))
-        _fig_rev.add_hline(y=COMPANY_TARGET, line=dict(color="rgba(255,255,255,0.15)",width=1,dash="dash"),
-            annotation_text="Target", annotation_font=dict(color="rgba(255,255,255,0.3)",size=10))
-    _fig_rev.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="rgba(255,255,255,0.4)",
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", tickvals=list(range(1,tot_days+1,5)),
-            title="Dag", tickfont=dict(size=10)),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.04)", tickprefix="€", tickfont=dict(size=10)),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
-            font=dict(color="rgba(255,255,255,0.4)", size=10)),
-        margin=dict(l=0,r=10,t=30,b=0), height=240, autosize=True)
-    _right_h = ch(_fig_rev)
-else:
-    def _get_t(n):
-        if n in TARGETS: return TARGETS[n]
-        last=n.split()[-1] if n else ""
-        for k,v in TARGETS.items():
-            if k.split()[-1]==last: return v
-        return DEFAULT_TARGET
-    _rc = excl.groupby("consultant")["revenue"].sum().reset_index()
-    _rc["t"] = pd.to_numeric(_rc["consultant"].apply(_get_t), errors="coerce").fillna(DEFAULT_TARGET)
-    _rc["p"] = (_rc["revenue"]/_rc["t"]*100).round(1)
-    _rc["r"] = (_rc["t"]-_rc["revenue"]).clip(lower=0)
-    _rc = _rc.sort_values("revenue", ascending=True)
-    _rc["c"] = _rc["p"].apply(lambda x: "#00e5a0" if x>=100 else ("#f5a623" if x>=80 else "#e92076"))
-    _fig_fb = go.Figure()
-    _fig_fb.add_trace(go.Bar(x=_rc["revenue"], y=_rc["consultant"], orientation="h",
-        marker_color=_rc["c"], marker_line_width=0,
-        text=_rc.apply(lambda r: f"  €{r['revenue']:,.0f}  ·  {r['p']:.0f}%", axis=1),
-        textposition="inside", insidetextanchor="start", textfont=dict(color="white",size=11,family="Inter")))
-    _fig_fb.add_trace(go.Bar(x=_rc["r"], y=_rc["consultant"], orientation="h",
-        marker_color="rgba(255,255,255,0.03)", marker_line_color="rgba(255,255,255,0.06)", marker_line_width=1))
-    _fig_fb.update_layout(barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="rgba(255,255,255,0.4)",
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", tickprefix="€", tickfont=dict(size=10), zeroline=False),
-        yaxis=dict(tickfont=dict(size=12,family="Inter"), gridcolor="rgba(0,0,0,0)"),
-        margin=dict(l=0,r=10,t=10,b=0), height=300, bargap=0.2, showlegend=False, autosize=True)
-    _right_h = ch(_fig_fb)
+# ── Nav ───────────────────────────────────────────────────────────────────────
+def render_nav():
+    n1,n2,n3=st.columns([1,1,2])
+    with n1:
+        if st.button("Omzet", key="b0"):
+            st.session_state.update({"screen":0,"locked":False,"last_sw":_time.time()})
+            st.rerun(scope="app")
+    with n2:
+        if st.button("Pipeline", key="b1"):
+            st.session_state.update({"screen":1,"locked":False,"last_sw":_time.time()})
+            st.rerun(scope="app")
+    with n3:
+        if st.button("★  Vacatures", key="b2"):
+            st.session_state.update({"screen":2,"locked":True,"vac_idx":0,"vac_ts":_time.time()})
+            st.rerun(scope="app")
+    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
-# Recruiter target bar (shared across screen 0)
-def _get_tbar(name):
-    if name in TARGETS: return TARGETS[name]
-    last = name.split()[-1] if name else ""
-    for k,v in TARGETS.items():
-        if k.split()[-1]==last: return v
-    return DEFAULT_TARGET
-_rc_df = df_cur[df_cur["consultant"]!="Mireille Prooi"].groupby("consultant")["revenue"].sum().reset_index()
-_existing = set(_rc_df["consultant"].tolist())
-_zero_rows = [{"consultant":n,"revenue":0.0} for n,t in TARGETS.items() if t>0 and n not in _existing]
-if _zero_rows: _rc_df = pd.concat([_rc_df, pd.DataFrame(_zero_rows)], ignore_index=True)
-_rc_df["target"]    = _rc_df["consultant"].apply(_get_tbar)
-_rc_df["pct"]       = (_rc_df["revenue"]/_rc_df["target"]*100).round(1)
-_rc_df["resterend"] = (_rc_df["target"]-_rc_df["revenue"]).clip(lower=0)
-_rc_df              = _rc_df.sort_values("revenue", ascending=True)
-_rc_df["color"]     = _rc_df["pct"].apply(lambda x: "#00e5a0" if x>=100 else ("#f5a623" if x>=80 else "#e92076"))
-_fig3 = go.Figure()
-_fig3.add_trace(go.Bar(x=_rc_df["revenue"], y=_rc_df["consultant"], orientation="h", name="Behaald",
-    marker_color=_rc_df["color"], marker_line_width=0,
-    text=_rc_df.apply(lambda r: f"€{r['revenue']:,.0f}  ({r['pct']:.0f}%)", axis=1),
-    textposition="inside", insidetextanchor="middle", textfont=dict(color="white",size=12),
-    customdata=_rc_df[["target","pct"]].values,
-    hovertemplate="<b>%{y}</b><br>Behaald: €%{x:,.0f}<br>Target: €%{customdata[0]:,.0f}<br>%{customdata[1]:.0f}%<extra></extra>"))
-_fig3.add_trace(go.Bar(x=_rc_df["resterend"], y=_rc_df["consultant"], orientation="h", name="Resterend",
-    marker_color="rgba(255,255,255,0.05)", marker_line_color="rgba(255,255,255,0.1)", marker_line_width=1,
-    hovertemplate="<b>%{y}</b><br>Nog te gaan: €%{x:,.0f}<extra></extra>"))
-_fig3.update_layout(barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    font_color="rgba(255,255,255,0.5)",
-    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickprefix="€", tickfont=dict(size=10), zeroline=False),
-    yaxis=dict(tickfont=dict(size=13), gridcolor="rgba(0,0,0,0)"),
-    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
-        font=dict(color="rgba(255,255,255,0.35)", size=10)),
-    margin=dict(l=0,r=10,t=30,b=0), height=max(300, len(_rc_df)*42), bargap=0.22, autosize=True)
-_bar_h = ch(_fig3)
+render_nav()
 
-screen0_html = (
-    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:0.8rem">'
-    + f'<div class="card"><div class="card-top"></div><div class="card-label">Dagen resterend</div>'
-    + f'<div class="card-val" style="color:{dc}">{days_rem}</div>'
-    + f'<div class="card-sub">van {tot_days} dagen in {CURRENT_MONTH}</div></div>'
-    + f'<div class="card"><div class="card-top"></div><div class="card-label">Maandomzet</div>'
-    + f'<div class="card-val pink">€{tot:,.0f}</div>'
-    + f'<div class="card-sub">{pct:.0f}% van €{COMPANY_TARGET:,.0f} target</div>'
-    + f'<div class="prog"><div class="prog-fill" style="width:{pct:.1f}%"></div></div></div>'
-    + f'<div class="card"><div class="card-top"></div><div class="card-label">Open Vacatures</div>'
-    + f'<div class="card-val teal">{open_vac_count}</div><div class="card-sub">actief uitstaand</div></div>'
-    + f'<div class="card"><div class="card-top"></div><div class="card-label">Omzetverwachting</div>'
-    + f'<div class="card-val" style="color:{fc};font-size:2.2rem">{ft}</div>'
-    + f'<div class="card-sub">{fs}</div></div>'
-    + '</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 2.2fr;gap:1rem;margin-bottom:0.5rem">'
-    + f'<div>{_donut_h}</div><div>{_right_h}</div></div>'
-    + f'<div>{_bar_h}</div>'
-)
+# ════════════════════════════════════════════════════════════════
+# SCREENS
+# ════════════════════════════════════════════════════════════════
+def render_screen():
+    scr=st.session_state["screen"]
 
-# ══════════════════════════════════════════════════════
-# BUILD SCREEN 1 — PIPELINE
-# ══════════════════════════════════════════════════════
-_p   = pipeline
-_ttf = f"{_p['avg_ttf']} dgn" if _p['avg_ttf'] else "—"
-_tth = f"{_p['avg_tth']} dgn" if _p['avg_tth'] else "—"
-_q_start = (nl_now()-timedelta(days=90)).strftime("%-d %B")
-_q_end   = nl_now().strftime("%-d %B %Y")
-for _en,_nl in {"January":"januari","February":"februari","March":"maart","April":"april",
-                "May":"mei","June":"juni","July":"juli","August":"augustus",
-                "September":"september","October":"oktober","November":"november","December":"december"}.items():
-    _q_start=_q_start.replace(_en,_nl); _q_end=_q_end.replace(_en,_nl)
+    # ── OMZET ────────────────────────────────────────────────────────────────
+    if scr==0:
+        k1,k2,k3,k4=st.columns(4)
+        with k1:
+            dc="#00e5a0" if days_rem<=3 else "#f5a623" if days_rem<=7 else "#00d4c8"
+            st.markdown(f"""<div class="card"><div class="card-top"></div>
+                <div class="card-label">Dagen resterend</div>
+                <div class="card-val" style="color:{dc}">{days_rem}</div>
+                <div class="card-sub">van {tot_days} dagen in {CURRENT_MONTH}</div>
+            </div>""", unsafe_allow_html=True)
+        with k2:
+            st.markdown(f"""<div class="card"><div class="card-top"></div>
+                <div class="card-label">Maandomzet</div>
+                <div class="card-val pink">€{tot:,.0f}</div>
+                <div class="card-sub">{pct:.0f}% van €{COMPANY_TARGET:,.0f} target</div>
+                <div class="prog"><div class="prog-fill" style="width:{pct:.1f}%"></div></div>
+            </div>""", unsafe_allow_html=True)
+        with k3:
+            st.markdown(f"""<div class="card"><div class="card-top"></div>
+                <div class="card-label">Open Vacatures</div>
+                <div class="card-val teal">{open_vac_count}</div>
+                <div class="card-sub">actief uitstaand</div>
+            </div>""", unsafe_allow_html=True)
+        with k4:
+            if forecast and forecast>0:
+                fp=min(forecast/COMPANY_TARGET*100,150)
+                fc="#00e5a0" if fp>=100 else "#f5a623" if fp>=80 else "#e92076"
+                ft=f"€{forecast:,.0f}"
+                fs=f"{fp:.0f}% van target · historisch dagpatroon"
+            else:
+                fc="rgba(255,255,255,0.25)"; ft="—"; fs="onvoldoende data"
+            st.markdown(f"""<div class="card"><div class="card-top"></div>
+                <div class="card-label">Omzetverwachting</div>
+                <div class="card-val" style="color:{fc};font-size:2.2rem">{ft}</div>
+                <div class="card-sub">{fs}</div>
+            </div>""", unsafe_allow_html=True)
 
-_instroom = _p["op_gesprek"] + _p["eerste_gesprek"] + _p["aanbod"] + _p["geplaatst"]
-_kpis = [("Instroom",_instroom,"#f5a623"),("Op Gesprek",_p["op_gesprek"],"#00d4c8"),
-         ("Gesprek Bij Klant",_p["eerste_gesprek"],"#e92076"),
-         ("Heeft Aanbod",_p["aanbod"],"#a78bfa"),("Geplaatst ✓",_p["geplaatst"],"#00e5a0")]
-_kpi_html = "".join(
-    f'<div class="fkpi"><div class="fkpi-val" style="color:{_c}">{_v}</div>'
-    f'<div class="fkpi-lbl">{_l}</div></div>'
-    for _l,_v,_c in _kpis)
+        st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
-_fig_f = go.Figure(go.Funnel(
-    y=["Instroom","Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"],
-    x=[_instroom,_p["op_gesprek"],_p["eerste_gesprek"],_p["aanbod"],_p["geplaatst"]],
-    textinfo="value+percent initial",
-    marker=dict(color=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"],line=dict(width=0)),
-    connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
-    textfont=dict(size=14,color="white",family="Inter")))
-_fig_f.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    font_color="rgba(255,255,255,0.5)", margin=dict(l=160,r=40,t=10,b=10),
-    height=300, autosize=True, yaxis=dict(tickfont=dict(size=12,family="Inter")))
-_funnel_h = ch(_fig_f)
+        cd,cb=st.columns([1,2.2])
+        with cd:
+            fig=go.Figure(go.Pie(values=[tot,rem],labels=["Behaald","Resterend"],
+                hole=0.8,sort=False,textinfo="none",
+                marker_colors=["#e92076","rgba(255,255,255,0.04)"],
+                marker=dict(line=dict(width=0))))
+            fig.add_annotation(text=f"<b>{pct:.0f}%</b>",x=0.5,y=0.58,
+                font=dict(size=56,color="#e92076",family="Syne"),showarrow=False)
+            fig.add_annotation(text=f"€{tot:,.0f}",x=0.5,y=0.40,
+                font=dict(size=15,color="rgba(255,255,255,0.6)"),showarrow=False)
+            fig.add_annotation(text=f"van €{COMPANY_TARGET:,.0f}",x=0.5,y=0.27,
+                font=dict(size=10,color="rgba(255,255,255,0.22)"),showarrow=False)
+            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,margin=dict(l=10,r=10,t=10,b=10),height=220)
+            st.plotly_chart(fig,use_container_width=True)
 
-_arrow = "↑" if delta>=0 else "↓"
-_clr2  = "#00e5a0" if delta>=0 else "#e92076"
+        with cb:
+            # Revenue chart with forecast line
+            if daily_days and daily_rev:
+                all_days=list(range(1,tot_days+1))
+                # Actual line up to today
+                act_x=daily_days; act_y=daily_rev
+                # Forecast curve: run model for each future day using cumulative revenue
+                # at that point, giving a realistic curved path rather than a straight line.
+                fc_x, fc_y = [], []
+                if forecast and len(act_y) > 0:
+                    inv_raw_fc = pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet"))
+                    last_day   = daily_days[-1]
+                    last_val   = act_y[-1]
+                    rem_days   = tot_days - last_day
+                    if rem_days > 0:
+                        # Distribute remaining revenue via empirical intramonth shape:
+                        # compute what fraction of a month falls in each remaining day,
+                        # then scale so total matches the model's end-of-month forecast.
+                        hist_df = inv_raw_fc.copy()
+                        hist_df["_date"]  = pd.to_datetime(hist_df.get("date", hist_df.get("value_date","")), errors="coerce")
+                        hist_df["_month"] = hist_df["_date"].dt.strftime("%Y-%m")
+                        hist_df["_day"]   = hist_df["_date"].dt.day
+                        hist_df["_total"] = pd.to_numeric(hist_df.get("total",0), errors="coerce").fillna(0)
+                        hist_df["_status"]= hist_df.get("status","").astype(str)
+                        hist_past = hist_df[(hist_df["_status"]=="Verzonden") & (hist_df["_month"]!=CURRENT_MONTH)]
+                        # Average daily revenue as fraction of month total across history
+                        day_weights = {}
+                        for m in hist_past["_month"].unique():
+                            mdf = hist_past[hist_past["_month"]==m]
+                            mt  = mdf["_total"].sum()
+                            if mt <= 0: continue
+                            for d, g in mdf.groupby("_day"):
+                                day_weights[d] = day_weights.get(d, []) + [g["_total"].sum() / mt]
+                        avg_day_frac = {d: float(np.mean(v)) for d, v in day_weights.items()}
+                        # Sum of weights for remaining days
+                        future_days = list(range(last_day + 1, tot_days + 1))
+                        raw_w = [avg_day_frac.get(d, 0.001) for d in future_days]
+                        total_rem_frac = sum(raw_w) if sum(raw_w) > 0 else 1
+                        remaining_revenue = forecast - last_val
+                        cumulative = last_val
+                        fc_x = [last_day]
+                        fc_y = [last_val]
+                        for i, d in enumerate(future_days):
+                            cumulative += remaining_revenue * (raw_w[i] / total_rem_frac)
+                            fc_x.append(d)
+                            fc_y.append(round(cumulative))
 
-screen1_html = (
-    f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;'
-    f'text-transform:uppercase;margin-bottom:1rem;">Kwartaal · {_q_start} – {_q_end}</div>'
-    + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0.8rem;margin-bottom:1rem">'
-    + _kpi_html + '</div>'
-    + '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:1rem;margin-bottom:0.5rem">'
-    + f'<div>{_funnel_h}</div>'
-    + '<div>'
-    + f'<div class="card" style="margin-bottom:0.8rem"><div class="card-top"></div>'
-    + f'<div class="card-label">vs vorige maand (t/m dag {today_day})</div>'
-    + f'<div style="font-family:Syne,sans-serif;font-size:1.8rem;font-weight:800;'
-    + f'color:{_clr2};margin-top:0.2rem">{_arrow} €{abs(delta):,.0f}</div>'
-    + f'<div class="card-sub">{dpc:+.1f}%</div></div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem">'
-    + f'<div class="card"><div class="card-top"></div><div class="card-label">Gem. Time to Fill</div>'
-    + f'<div class="card-val teal" style="font-size:2rem">{_ttf}</div></div>'
-    + f'<div class="card"><div class="card-top"></div><div class="card-label">Gem. Time to Hire</div>'
-    + f'<div class="card-val pink" style="font-size:2rem">{_tth}</div></div>'
-    + '</div></div></div>'
-    + f'<div>{_bar_h}</div>'
-)
+                fig_rev=go.Figure()
+                fig_rev.add_trace(go.Scatter(
+                    x=act_x,y=act_y,mode="lines",name="Werkelijk",
+                    line=dict(color="#e92076",width=3),
+                    fill="tozeroy",fillcolor="rgba(233,32,118,0.08)"))
+                if fc_x:
+                    fig_rev.add_trace(go.Scatter(
+                        x=fc_x,y=fc_y,mode="lines",name="Verwachting",
+                        line=dict(color="#f5a623",width=2,dash="dot")))
+                    fig_rev.add_hline(y=COMPANY_TARGET,
+                        line=dict(color="rgba(255,255,255,0.15)",width=1,dash="dash"),
+                        annotation_text="Target",
+                        annotation_font=dict(color="rgba(255,255,255,0.3)",size=10))
+                fig_rev.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
+                    font_color="rgba(255,255,255,0.4)",
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.04)",
+                        tickvals=list(range(1,tot_days+1,5)),title="Dag",
+                        tickfont=dict(size=10)),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.04)",
+                        tickprefix="€",tickfont=dict(size=10)),
+                    legend=dict(orientation="h",yanchor="bottom",y=1.01,
+                        xanchor="right",x=1,font=dict(color="rgba(255,255,255,0.4)",size=10)),
+                    margin=dict(l=0,r=10,t=30,b=0),height=240)
+                st.plotly_chart(fig_rev,use_container_width=True)
+            else:
+                # Fallback: recruiter bar chart
+                def get_t(n):
+                    if n in TARGETS: return TARGETS[n]
+                    last=n.split()[-1] if n else ""
+                    for k,v in TARGETS.items():
+                        if k.split()[-1]==last: return v
+                    return DEFAULT_TARGET
+                rc=excl.groupby("consultant")["revenue"].sum().reset_index()
+                rc["t"]=rc["consultant"].apply(get_t)
+                rc["t"]=pd.to_numeric(rc["t"],errors="coerce").fillna(DEFAULT_TARGET).astype(float)
+                rc["p"]=(rc["revenue"]/rc["t"]*100).round(1)
+                rc["r"]=(rc["t"]-rc["revenue"]).clip(lower=0)
+                rc=rc.sort_values("revenue",ascending=True)
+                rc["c"]=rc["p"].apply(lambda x:"#00e5a0" if x>=100 else("#f5a623" if x>=80 else"#e92076"))
+                fig2=go.Figure()
+                fig2.add_trace(go.Bar(x=rc["revenue"],y=rc["consultant"],orientation="h",
+                    marker_color=rc["c"],marker_line_width=0,
+                    text=rc.apply(lambda r:f"  €{r['revenue']:,.0f}  ·  {r['p']:.0f}%",axis=1),
+                    textposition="inside",insidetextanchor="start",
+                    textfont=dict(color="white",size=11,family="Inter")))
+                fig2.add_trace(go.Bar(x=rc["r"],y=rc["consultant"],orientation="h",
+                    marker_color="rgba(255,255,255,0.03)",
+                    marker_line_color="rgba(255,255,255,0.06)",marker_line_width=1))
+                fig2.update_layout(barmode="stack",plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",font_color="rgba(255,255,255,0.4)",
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.04)",tickprefix="€",
+                        tickfont=dict(size=10),zeroline=False),
+                    yaxis=dict(tickfont=dict(size=12,family="Inter"),gridcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0,r=10,t=10,b=0),height=300,bargap=0.2,showlegend=False)
+                st.plotly_chart(fig2,use_container_width=True)
 
-# ══════════════════════════════════════════════════════
-# BUILD SCREEN 2 — VACATURES
-# ══════════════════════════════════════════════════════
-_vac_cards = ""
-_sidebar   = ""
-_num_vacs  = len(vacs)
+        # Recruiter bar always shown below
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        rc_df = df_cur[df_cur["consultant"] != "Mireille Prooi"].groupby("consultant")["revenue"].sum().reset_index()
+        def get_target_bar(name):
+            if name in TARGETS: return TARGETS[name]
+            last = name.split()[-1] if name else ""
+            for k, v in TARGETS.items():
+                if k.split()[-1] == last: return v
+            return DEFAULT_TARGET
+        # Add all recruiters from TARGETS who have a target > 0 but no invoices yet this month
+        existing = set(rc_df["consultant"].tolist())
+        zero_rows = [{"consultant": name, "revenue": 0.0}
+                     for name, target in TARGETS.items()
+                     if target > 0 and name not in existing]
+        if zero_rows:
+            rc_df = pd.concat([rc_df, pd.DataFrame(zero_rows)], ignore_index=True)
+        rc_df["target"]    = rc_df["consultant"].apply(get_target_bar)
+        rc_df["pct"]       = (rc_df["revenue"] / rc_df["target"] * 100).round(1)
+        rc_df["resterend"] = (rc_df["target"] - rc_df["revenue"]).clip(lower=0)
+        rc_df              = rc_df.sort_values("revenue", ascending=True)
+        rc_df["color"]     = rc_df["pct"].apply(lambda x: "#00e5a0" if x >= 100 else ("#f5a623" if x >= 80 else "#e92076"))
+        fig3 = go.Figure()
+        fig3.add_trace(go.Bar(
+            x=rc_df["revenue"], y=rc_df["consultant"], orientation="h", name="Behaald",
+            marker_color=rc_df["color"], marker_line_width=0,
+            text=rc_df.apply(lambda r: f"€{r['revenue']:,.0f}  ({r['pct']:.0f}%)", axis=1),
+            textposition="inside", insidetextanchor="middle",
+            textfont=dict(color="white", size=12),
+            customdata=rc_df[["target","pct"]].values,
+            hovertemplate="<b>%{y}</b><br>Behaald: €%{x:,.0f}<br>Target: €%{customdata[0]:,.0f}<br>%{customdata[1]:.0f}%<extra></extra>"
+        ))
+        fig3.add_trace(go.Bar(
+            x=rc_df["resterend"], y=rc_df["consultant"], orientation="h", name="Resterend",
+            marker_color="rgba(255,255,255,0.05)",
+            marker_line_color="rgba(255,255,255,0.1)", marker_line_width=1,
+            hovertemplate="<b>%{y}</b><br>Nog te gaan: €%{x:,.0f}<extra></extra>"
+        ))
+        fig3.update_layout(
+            barmode="stack", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font_color="rgba(255,255,255,0.5)",
+            xaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickprefix="€", tickfont=dict(size=10), zeroline=False),
+            yaxis=dict(tickfont=dict(size=13), gridcolor="rgba(0,0,0,0)"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
+                font=dict(color="rgba(255,255,255,0.35)", size=10)),
+            margin=dict(l=0, r=10, t=30, b=0), height=max(300, len(rc_df) * 42), bargap=0.22
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
-for _i, _v in enumerate(vacs):
-    _title   = _v.get("jobTitle","—")
-    _company = (_v.get("toCompany") or {}).get("name","—")
-    _ow      = _v.get("owner") or {}
-    _cons    = f"{_ow.get('firstName','')} {_ow.get('lastName','')}".strip() or "—"
-    _created = pd.to_datetime(_v.get("creationDate")) if _v.get("creationDate") else None
-    _dopen   = (nl_now()-_created.replace(tzinfo=None)).days if _created else 0
-    _loc     = _v.get("workLocation","") or ""
-    if _loc in ("None","nan"): _loc=""
-    _vno     = _v.get("vacancyNo","")
-    _agency  = _v.get("agency","") or ""
-    if _agency in ("None","nan"): _agency=""
-    _intro   = smart_truncate(_v.get("intro","") or "")
-    _dc      = "#e92076" if _dopen>60 else "#f5a623" if _dopen>30 else "#00d4c8"
-    _pills   = (f'<span class="pill">📍 {_loc}</span>' if _loc else "")
-    _disp    = "block" if _i==0 else "none"
-    _agency_span = f"<span style='font-size:0.72rem;color:rgba(255,255,255,0.3);'>· {_agency}</span>" if _agency else ""
-    _intro_html  = (f"<div style='font-size:1rem;color:rgba(255,255,255,0.55);line-height:1.7;'>{_intro}</div>") if _intro else ""
-    _vac_cards += (
-        f'<div class="vac-card" id="vc-{_i}" style="display:{_disp}">'
-        f'<div class="vac-big">'
-        f'<div class="vac-num">{_i+1} van {_num_vacs} · vacature {_vno}</div>'
-        f'<div class="vac-title">{_title}</div>'
-        f'<div class="vac-company">🏢 {_company}</div>'
-        f'<div class="pills">{_pills}</div>'
-        f'<div style="margin:0.8rem 0 1rem;padding:1rem 1.1rem;background:rgba(42,8,69,0.5);'
-        f'border-radius:10px;border-left:2px solid rgba(0,212,200,0.35);">'
-        f'<div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;">'
-        f'<span style="font-size:0.95rem;font-weight:600;color:white;">👤 {_cons}</span>{_agency_span}</div>'
-        f'<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.7rem;">'
-        f'<span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);'
-        f'border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{_vno}</span>'
-        f'<span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);'
-        f'border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{_dc};">⏱ {_dopen} dagen open</span>'
-        f'</div>{_intro_html}</div>'
-        f'</div></div>'
-    )
-    # Sidebar
-    _cr2 = pd.to_datetime(_v.get("creationDate")) if _v.get("creationDate") else None
-    _do2 = (nl_now()-_cr2.replace(tzinfo=None)).days if _cr2 else 0
-    _dc2 = "#e92076" if _do2>60 else "#f5a623" if _do2>30 else "rgba(255,255,255,0.2)"
-    _r2  = _cons
-    _cls2= "vac-sm cur" if _i==0 else "vac-sm"
-    _sidebar += (
-        f'<div class="{_cls2}" id="vsm-{_i}">'
-        f'<div class="vac-sm-t">{_title}</div>'
-        f'<div class="vac-sm-c" style="margin-top:0.15rem;">'
-        f'<span style="color:rgba(255,255,255,0.45);font-weight:500">{_r2}</span>'
-        f' · {_company} · <span style="color:{_dc2}">{_do2}d</span></div></div>'
-    )
+    # ── PIPELINE ─────────────────────────────────────────────────────────────
+    elif scr==1:
+        p=pipeline
+        ttf=f"{p['avg_ttf']} dgn" if p['avg_ttf'] else "—"
+        tth=f"{p['avg_tth']} dgn" if p['avg_tth'] else "—"
 
-_dots = "".join(f'<div class="dot{"" if _i else " on"}" id="dot-{_i}"></div>' for _i in range(_num_vacs))
+        # Quarter period label: 90 days back from today
+        q_start = (nl_now() - timedelta(days=90)).strftime("%-d %B")
+        q_end   = nl_now().strftime("%-d %B %Y")
+        NL_MONTHS = {"January":"januari","February":"februari","March":"maart","April":"april",
+                     "May":"mei","June":"juni","July":"juli","August":"augustus",
+                     "September":"september","October":"oktober","November":"november","December":"december"}
+        for en,nl in NL_MONTHS.items():
+            q_start=q_start.replace(en,nl); q_end=q_end.replace(en,nl)
+        st.markdown(f"""<div style="font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;
+            text-transform:uppercase;margin-bottom:1rem;">
+            Kwartaal · {q_start} – {q_end}
+        </div>""", unsafe_allow_html=True)
 
-_btn_style = ("background:rgba(42,8,69,0.7);border:1px solid rgba(233,32,118,0.3);"
-              "color:rgba(255,255,255,0.6);border-radius:6px;padding:0.3rem 0.9rem;"
-              "font-size:0.72rem;cursor:pointer;font-family:Inter,sans-serif;margin-right:0.4rem;")
+        instroom = p["op_gesprek"] + p["eerste_gesprek"] + p["aanbod"] + p["geplaatst"]
+        kpis=[
+            ("Instroom",         instroom,             "#f5a623"),
+            ("Op Gesprek",       p["op_gesprek"],      "#00d4c8"),
+            ("Gesprek Bij Klant",p["eerste_gesprek"],  "#e92076"),
+            ("Heeft Aanbod",     p["aanbod"],          "#a78bfa"),
+            ("Geplaatst ✓",      p["geplaatst"],       "#00e5a0"),
+        ]
+        cols=st.columns(5)
+        for col,(lbl,val,clr) in zip(cols,kpis):
+            with col:
+                st.markdown(f"""<div class="fkpi">
+                    <div class="fkpi-val" style="color:{clr}">{val}</div>
+                    <div class="fkpi-lbl">{lbl}</div>
+                </div>""", unsafe_allow_html=True)
 
-screen2_html = (
-    '<div style="margin-bottom:0.8rem">'
-    f'<a href="https://www.lincks.nl/vacatures" target="_blank" style="text-decoration:none;">'
-    f'<div style="background:linear-gradient(135deg,rgba(233,32,118,0.15),rgba(0,212,200,0.08));'
-    f'border:1px solid rgba(233,32,118,0.3);border-radius:14px;padding:0.9rem 1.4rem;'
-    f'display:inline-flex;align-items:center;gap:1rem;">'
-    f'<div style="font-family:Syne,sans-serif;font-size:2.6rem;font-weight:800;color:#e92076;line-height:1;">{open_vac_count}</div>'
-    f'<div><div style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:3px;text-transform:uppercase;">open vacatures</div>'
-    f'<div style="font-size:0.7rem;color:rgba(255,255,255,0.2);margin-top:0.2rem;">lincks.nl/vacatures ↗</div></div>'
-    f'</div></a></div>'
-    + '<div style="display:grid;grid-template-columns:2.5fr 1fr;gap:1.2rem">'
-    + f'<div>{_vac_cards}'
-    + f'<div class="dots" id="vac-dots">{_dots}</div>'
-    + f'<div style="margin-top:0.5rem">'
-    + f'<button onclick="prevVac()" style="{_btn_style}">← Vorige</button>'
-    + f'<button onclick="nextVac()" style="{_btn_style}">Volgende →</button>'
-    + '</div></div>'
-    + '<div><div style="font-size:0.52rem;color:rgba(255,255,255,0.18);letter-spacing:3px;'
-    + 'text-transform:uppercase;margin-bottom:0.6rem;padding-left:0.3rem">Per recruiter</div>'
-    + f'{_sidebar}</div></div>'
-) if _num_vacs else '<div style="color:rgba(255,255,255,0.4);padding:2rem">Geen actieve vacatures.</div>'
+        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════
-# ASSEMBLE & RENDER
-# ══════════════════════════════════════════════════════
-_nav_btn = ("background:rgba(42,8,69,0.6);border:1px solid rgba(233,32,118,0.2);"
-            "color:rgba(255,255,255,0.4);border-radius:6px;font-size:0.62rem;"
-            "letter-spacing:2px;text-transform:uppercase;font-weight:500;"
-            "padding:0.3rem 0.75rem;cursor:pointer;font-family:Inter,sans-serif;"
-            "transition:all 0.15s;margin-right:0.4rem;")
+        cf,ct=st.columns([1.4,1])
+        with cf:
+            lbls=["Instroom","Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"]
+            vals=[instroom,p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
+            clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"]
+            fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
+                marker=dict(color=clrs,line=dict(width=0)),
+                connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
+                textfont=dict(size=14,color="white",family="Inter")))
+            fig_f.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
+                font_color="rgba(255,255,255,0.5)",
+                margin=dict(l=160,r=40,t=10,b=10),height=300,
+                yaxis=dict(tickfont=dict(size=12,family="Inter")))
+            st.plotly_chart(fig_f,use_container_width=True)
 
-_js = """
-<script>
-var D=['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
-var M=['januari','februari','maart','april','mei','juni','juli','augustus',
-       'september','oktober','november','december'];
-function getNL(){return new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"}));}
-function tickClock(){
-  var n=getNL();
-  var ce=document.getElementById('tv-time');var de=document.getElementById('tv-date');
-  if(ce)ce.textContent=('0'+n.getHours()).slice(-2)+':'+('0'+n.getMinutes()).slice(-2)+':'+('0'+n.getSeconds()).slice(-2);
-  if(de)de.textContent=(D[n.getDay()]+' '+n.getDate()+' '+M[n.getMonth()]+' '+n.getFullYear()).toUpperCase();
-}
-tickClock();setInterval(tickClock,1000);
+        with ct:
+            arrow="↑" if delta>=0 else "↓"
+            clr2="#00e5a0" if delta>=0 else "#e92076"
+            st.markdown(f"""
+            <div class="card" style="margin-bottom:0.8rem"><div class="card-top"></div>
+                <div class="card-label">vs vorige maand (t/m dag {today_day})</div>
+                <div style="font-family:Syne,sans-serif;font-size:1.8rem;font-weight:800;
+                    color:{clr2};margin-top:0.2rem">{arrow} €{abs(delta):,.0f}</div>
+                <div class="card-sub">{dpc:+.1f}%</div>
+            </div>""", unsafe_allow_html=True)
+            t1,t2=st.columns(2)
+            with t1:
+                st.markdown(f"""<div class="card"><div class="card-top"></div>
+                    <div class="card-label">Gem. Time to Fill</div>
+                    <div class="card-val teal" style="font-size:2rem">{ttf}</div>
+                </div>""", unsafe_allow_html=True)
+            with t2:
+                st.markdown(f"""<div class="card"><div class="card-top"></div>
+                    <div class="card-label">Gem. Time to Hire</div>
+                    <div class="card-val pink" style="font-size:2rem">{tth}</div>
+                </div>""", unsafe_allow_html=True)
 
-var curScr=0,lastSw=Date.now(),vacIdx=0,vacLastSw=Date.now();
-""" + f"var numVacs={_num_vacs};" + """
-function resizeCharts(screenEl){
-  if(!window.Plotly||!screenEl)return;
-  setTimeout(function(){
-    screenEl.querySelectorAll('.plotly-graph-div').forEach(function(el){
-      try{Plotly.Plots.resize(el);}catch(e){}
-    });
-  },50);
-}
-function switchScreen(n,manual){
-  var screens=document.querySelectorAll('.tv-screen');
-  screens.forEach(function(el,i){el.style.display=i===n?'':'none';});
-  document.querySelectorAll('.tv-nav-btn').forEach(function(el,i){
-    el.style.background=i===n?'rgba(233,32,118,0.2)':'rgba(42,8,69,0.6)';
-    el.style.color=i===n?'white':'rgba(255,255,255,0.4)';
-    el.style.borderColor=i===n?'rgba(233,32,118,0.5)':'rgba(233,32,118,0.2)';
-  });
-  resizeCharts(screens[n]);
-  curScr=n;if(manual)lastSw=Date.now();
-}
-window.addEventListener('load',function(){
-  setTimeout(function(){
-    document.querySelectorAll('.plotly-graph-div').forEach(function(el){
-      try{if(window.Plotly)Plotly.Plots.resize(el);}catch(e){}
-    });
-  },300);
-});
-function showVac(i){
-  if(numVacs===0)return;
-  document.querySelectorAll('.vac-card').forEach(function(el,j){el.style.display=j===i?'block':'none';});
-  document.querySelectorAll('[id^="dot-"]').forEach(function(el,j){el.className='dot'+(j===i?' on':'');});
-  document.querySelectorAll('[id^="vsm-"]').forEach(function(el,j){el.className=j===i?'vac-sm cur':'vac-sm';});
-  vacIdx=i;
-}
-function nextVac(){showVac((vacIdx+1)%numVacs);vacLastSw=Date.now();}
-function prevVac(){showVac((vacIdx-1+numVacs)%numVacs);vacLastSw=Date.now();}
-setInterval(function(){if(Date.now()-lastSw>=60000){switchScreen((curScr+1)%3,false);lastSw=Date.now();}},1000);
-setInterval(function(){if(curScr===2&&numVacs>0&&Date.now()-vacLastSw>=4000){showVac((vacIdx+1)%numVacs);vacLastSw=Date.now();}},1000);
-switchScreen(0,false);
-</script>
-"""
+    # ── VACATURES ────────────────────────────────────────────────────────────
+    elif scr==2:
+        if not vacs:
+            st.info("Geen actieve vacatures.")
+        else:
+            idx=st.session_state["vac_idx"]%len(vacs)
+            v=vacs[idx]
+            title    = v.get("jobTitle","—")
+            company  = (v.get("toCompany") or {}).get("name","—")
+            ow       = v.get("owner") or {}
+            cons     = f"{ow.get('firstName','')} {ow.get('lastName','')}".strip() or "—"
+            created  = pd.to_datetime(v.get("creationDate")) if v.get("creationDate") else None
+            days_open= (nl_now()-created.replace(tzinfo=None)).days if created else 0
+            loc      = v.get("workLocation","") or ""
+            if loc in ("None","nan"): loc=""
+            vno      = v.get("vacancyNo","")
+            agency      = v.get("agency","") or ""
+            if agency in ("None","nan"): agency=""
+            raw_intro   = v.get("intro","") or ""
+            # Smart truncate: cut at last complete sentence before 650 chars
+            def _smart_trunc(text, mx=650):
+                if not text or len(text)<=mx: return text
+                chunk=text[:mx]; last=max(chunk.rfind('.'),chunk.rfind('!'),chunk.rfind('?'))
+                if last>mx//3: return chunk[:last+1]
+                sp=chunk.rfind(' '); return (chunk[:sp]+'…') if sp>0 else chunk+'…'
+            intro = _smart_trunc(raw_intro)
 
-_iframe_css = """
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@300;400;500;600;700&display=swap');
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-html,body{font-family:'Inter',sans-serif;background:#180329;color:white;overflow:hidden;}
-body{animation:fadein 0.35s ease-in;}
-@keyframes fadein{from{opacity:0;}to{opacity:1;}}
-body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
-  background-image:linear-gradient(rgba(233,32,118,0.04) 1px,transparent 1px),
-  linear-gradient(90deg,rgba(233,32,118,0.04) 1px,transparent 1px);
-  background-size:60px 60px;pointer-events:none;z-index:0;}
-.wrap{position:relative;z-index:1;padding:0.9rem 2.5rem 1rem;}
-.hdr{display:flex;align-items:center;margin-bottom:0.7rem;}
-.hdr-left{display:flex;align-items:center;gap:1.2rem;}
-.hdr-badge{background:#e92076;color:white;font-size:0.55rem;font-weight:700;
-  letter-spacing:3px;padding:0.25rem 0.7rem;border-radius:3px;text-transform:uppercase;}
-.divider{height:1px;background:rgba(233,32,118,0.15);margin-bottom:0.6rem;}
-.card{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
-  border-radius:14px;padding:1.5rem;position:relative;overflow:hidden;}
-.card-top{position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#e92076,#63ccca);}
-.card-label{font-size:0.58rem;font-weight:600;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:3px;margin-bottom:0.7rem;}
-.card-val{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;line-height:1;}
-.pink{color:#e92076;}.teal{color:#00d4c8;}.green{color:#00e5a0;}.orange{color:#f5a623;}
-.card-sub{font-size:0.7rem;color:rgba(255,255,255,0.35);margin-top:0.5rem;}
-.prog{height:3px;background:rgba(255,255,255,0.08);border-radius:2px;margin-top:1rem;overflow:hidden;}
-.prog-fill{height:100%;background:linear-gradient(90deg,#e92076,#63ccca);border-radius:2px;}
-.fkpi{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
-  border-radius:12px;padding:1.5rem 1rem;text-align:center;}
-.fkpi-val{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;line-height:1;}
-.fkpi-lbl{font-size:0.58rem;color:rgba(255,255,255,0.5);letter-spacing:2px;text-transform:uppercase;margin-top:0.5rem;}
-.vac-big{background:linear-gradient(145deg,#1e0535 0%,#2a0845 60%,#180329 100%);
-  border:1px solid rgba(233,32,118,0.3);border-radius:18px;padding:2.2rem 2.5rem;
-  position:relative;overflow:hidden;min-height:340px;animation:slidein 0.4s cubic-bezier(0.4,0,0.2,1);}
-@keyframes slidein{from{opacity:0;transform:translateX(40px);}to{opacity:1;transform:translateX(0);}}
-.vac-big::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,#e92076 0%,#63ccca 50%,transparent 100%);}
-.vac-big::after{content:'';position:absolute;top:-80px;right:-80px;width:300px;height:300px;
-  background:radial-gradient(circle,rgba(233,32,118,0.06) 0%,transparent 70%);pointer-events:none;}
-.vac-num{font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.7rem;}
-.vac-title{font-family:'Syne',sans-serif;font-size:2.4rem;font-weight:800;color:white;line-height:1.1;margin-bottom:0.6rem;}
-.vac-company{font-size:1rem;color:#00d4c8;font-weight:600;margin-bottom:0.5rem;}
-.pills{display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;}
-.pill{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);
-  border-radius:20px;padding:0.3rem 0.85rem;font-size:0.72rem;color:rgba(255,255,255,0.55);}
-.pill.acc{background:rgba(0,212,200,0.1);border-color:rgba(0,212,200,0.25);color:#00d4c8;}
-.dots{display:flex;gap:0.35rem;justify-content:center;margin-top:1rem;}
-.dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.1);}
-.dot.on{background:#e92076;width:18px;border-radius:3px;}
-.vac-sm{background:rgba(42,8,69,0.5);border:1px solid rgba(233,32,118,0.15);
-  border-left:2px solid rgba(233,32,118,0.4);border-radius:8px;padding:0.65rem 0.9rem;margin-bottom:0.4rem;}
-.vac-sm.cur{border-left-color:#63ccca;background:rgba(99,204,202,0.05);}
-.vac-sm-t{font-size:0.8rem;font-weight:600;color:white;margin-bottom:0.1rem;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.vac-sm-c{font-size:0.65rem;color:rgba(255,255,255,0.4);}
-.nav-tabs{display:flex;gap:0.4rem;margin-bottom:1.4rem;align-items:center;}
-"""
+            days_c="#e92076" if days_open>60 else "#f5a623" if days_open>30 else "#00d4c8"
+            pills=""
+            if loc and loc not in ("None","nan",""): pills+=f'<span class="pill">📍 {loc}</span>'
 
-_body = (
-    '<div class="wrap">'
-    + f'<div class="hdr" style="display:flex;align-items:center;justify-content:space-between;">'
-    + f'<div class="hdr-left">{logo_html}<span class="hdr-badge">Live · {CURRENT_MONTH}</span></div>'
-    + '<div style="text-align:right;">'
-    + '<div id="tv-time" style="font-family:\'Syne\',\'Arial Black\',sans-serif;font-size:2.6rem;font-weight:800;'
-    + 'color:#e92076;line-height:1;letter-spacing:-1px;text-shadow:0 0 30px rgba(233,32,118,0.4);">--:--:--</div>'
-    + '<div id="tv-date" style="font-family:Inter,sans-serif;font-size:0.58rem;'
-    + 'color:rgba(255,255,255,0.22);letter-spacing:3px;text-transform:uppercase;margin-top:3px;">--</div>'
-    + '</div></div>'
-    + '<div class="divider" style="margin-top:0.5rem"></div>'
-    + '<div class="nav-tabs">'
-    + f'<button class="tv-nav-btn" onclick="switchScreen(0,true)" style="{_nav_btn}">Omzet</button>'
-    + f'<button class="tv-nav-btn" onclick="switchScreen(1,true)" style="{_nav_btn}">Pipeline</button>'
-    + f'<button class="tv-nav-btn" onclick="switchScreen(2,true)" style="{_nav_btn}">★ Vacatures</button>'
-    + '</div>'
-    + f'<div id="scr-0" class="tv-screen">{screen0_html}</div>'
-    + f'<div id="scr-1" class="tv-screen" style="display:none">{screen1_html}</div>'
-    + f'<div id="scr-2" class="tv-screen" style="display:none">{screen2_html}</div>'
-    + '<div style="text-align:center;padding:0.8rem 0 0.3rem;color:rgba(255,255,255,0.05);'
-    + 'font-size:0.52rem;letter-spacing:3px;text-transform:uppercase">'
-    + 'Data gecached · vernieuwd elke 5 minuten</div>'
-    + '</div>'
-)
+            dots="".join([f'<div class="dot {"on" if i==idx else ""}"></div>' for i in range(len(vacs))])
 
-components.html(
-    f'<!DOCTYPE html><html><head><meta charset="utf-8">'
-    f'<style>{_iframe_css}</style>'
-    f'</head><body>'
-    f'{_body}'
-    f'{_js}'
-    f'</body></html>',
-    height=1050,
-    scrolling=False
-)
+            # Top row: big total count card + progress indicator
+            ch,_sp=st.columns([1,3])
+            with ch:
+                st.markdown(f"""
+                <a href="https://www.lincks.nl/vacatures" target="_blank" style="text-decoration:none;">
+                  <div style="background:linear-gradient(135deg,rgba(233,32,118,0.15),rgba(0,212,200,0.08));
+                    border:1px solid rgba(233,32,118,0.3);border-radius:14px;padding:0.9rem 1.4rem;
+                    cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:1rem;">
+                    <div>
+                      <div style="font-family:Syne,sans-serif;font-size:2.6rem;font-weight:800;
+                        color:#e92076;line-height:1;">{open_vac_count}</div>
+                      <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:3px;
+                        text-transform:uppercase;margin-top:0.3rem;">open vacatures</div>
+                    </div>
+                    <div style="font-size:0.7rem;color:rgba(255,255,255,0.2);margin-left:auto;">
+                      lincks.nl/vacatures ↗
+                    </div>
+                  </div>
+                </a>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+
+            cm,cl=st.columns([2.5,1])
+            with cm:
+                st.markdown(f"""
+                <div class="vac-big">
+                  <div class="vac-num">{idx+1} van {len(vacs)} · vacature {vno}</div>
+                  <div class="vac-title">{title}</div>
+                  <div class="vac-company">🏢 {company}</div>
+                  <div class="pills">{pills}</div>
+                  <div style="margin:0.8rem 0 1rem;padding:1rem 1.1rem;
+                    background:rgba(255,255,255,0.03);border-radius:10px;
+                    border-left:2px solid rgba(0,212,200,0.35);">
+                    <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;">
+                      <span style="font-size:0.95rem;font-weight:600;color:white;">👤 {cons}</span>
+                      {"<span style='font-size:0.72rem;color:rgba(255,255,255,0.3);'>· " + agency + "</span>" if agency else ""}
+                    </div>
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.7rem;">
+                      <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{vno}</span>
+                      <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{days_c};">⏱ {days_open} dagen open</span>
+                    </div>
+                    {("<div style='font-size:1rem;color:rgba(255,255,255,0.55);line-height:1.7;'>" + intro + "</div>") if intro else ""}</div>
+                </div>
+                <div class="dots">{dots}</div>
+                """, unsafe_allow_html=True)
+                b1,b2,_=st.columns([1,1,4])
+                with b1:
+                    if st.button("← Vorige",key="vp"):
+                        st.session_state["vac_idx"]=(idx-1)%len(vacs)
+                        st.session_state["vac_ts"]=_time.time()
+                        st.rerun(scope="fragment")
+                with b2:
+                    if st.button("Volgende →",key="vn"):
+                        st.session_state["vac_idx"]=(idx+1)%len(vacs)
+                        st.session_state["vac_ts"]=_time.time()
+                        st.rerun(scope="fragment")
+
+            with cl:
+                st.markdown('<div style="font-size:0.52rem;color:rgba(255,255,255,0.18);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.6rem;padding-left:0.3rem">Per recruiter</div>', unsafe_allow_html=True)
+                for i,vv in enumerate(vacs):
+                    t2  = vv.get("jobTitle","—")
+                    c2  = (vv.get("toCompany") or {}).get("name","—")
+                    ow2 = vv.get("owner") or {}
+                    r2  = f"{ow2.get('firstName','')} {ow2.get('lastName','')}".strip() or "—"
+                    cr2 = pd.to_datetime(vv.get("creationDate")) if vv.get("creationDate") else None
+                    do2 = (nl_now()-cr2.replace(tzinfo=None)).days if cr2 else 0
+                    cls2= "vac-sm cur" if i==idx else "vac-sm"
+                    dc2 = "#e92076" if do2>60 else "#f5a623" if do2>30 else "rgba(255,255,255,0.2)"
+                    st.markdown(f"""<div class="{cls2}">
+                        <div class="vac-sm-t">{t2}</div>
+                        <div class="vac-sm-c" style="margin-top:0.15rem;">
+                          <span style="color:rgba(255,255,255,0.45);font-weight:500">{r2}</span>
+                          · {c2}
+                          · <span style="color:{dc2}">{do2}d</span>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+render_screen()
+
+st.markdown("""
+<div style="text-align:center;padding:0.8rem 0 0.3rem;color:rgba(255,255,255,0.05);
+    font-size:0.52rem;letter-spacing:3px;text-transform:uppercase">
+    Data gecached · vernieuwd elke 2 uur
+</div></div>
+""", unsafe_allow_html=True)
