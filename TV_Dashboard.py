@@ -628,20 +628,22 @@ tot_days=total_days()
 forecast=compute_forecast(pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet")), tot)
 
 # ── State ─────────────────────────────────────────────────────────────────────
-if "screen"       not in st.session_state: st.session_state["screen"]=0
-if "last_sw"      not in st.session_state: st.session_state["last_sw"]=_time.time()
+if "screen"        not in st.session_state: st.session_state["screen"]=0
+if "last_sw"       not in st.session_state: st.session_state["last_sw"]=_time.time()
 if "vac_start_idx" not in st.session_state: st.session_state["vac_start_idx"]=0
+if "locked"        not in st.session_state: st.session_state["locked"]=False
 
 # Screen durations: Omzet/Pipeline 60s, Vacatures 90s
+# locked=True when user manually clicks Vacatures — disables auto-switch until they click another tab
 SCREEN_DURATION = {0: 60, 1: 60, 2: 90}
 
 # Vacancy cycling handled by JS — autorefresh only needed for screen switching
 st_autorefresh(interval=60_000, limit=None, key="tv_autorefresh")
 
-now_t   = _time.time()
-_scr    = st.session_state["screen"]
-_dur    = SCREEN_DURATION.get(_scr, 60)
-if now_t - st.session_state["last_sw"] > _dur:
+now_t = _time.time()
+_scr  = st.session_state["screen"]
+_dur  = SCREEN_DURATION.get(_scr, 60)
+if not st.session_state["locked"] and now_t - st.session_state["last_sw"] > _dur:
     # When leaving Vacatures, advance start index by vacancies shown (90s / 30s = 3)
     if _scr == 2:
         _nv = len(vacs) if vacs else 1
@@ -703,15 +705,15 @@ def render_nav():
     n1,n2,n3=st.columns([1,1,2])
     with n1:
         if st.button("Omzet", key="b0"):
-            st.session_state.update({"screen":0,"last_sw":_time.time()})
+            st.session_state.update({"screen":0,"locked":False,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n2:
         if st.button("Pipeline", key="b1"):
-            st.session_state.update({"screen":1,"last_sw":_time.time()})
+            st.session_state.update({"screen":1,"locked":False,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n3:
         if st.button("★  Vacatures", key="b2"):
-            st.session_state.update({"screen":2,"last_sw":_time.time()})
+            st.session_state.update({"screen":2,"locked":True,"last_sw":_time.time()})
             st.rerun(scope="app")
     st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
