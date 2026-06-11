@@ -40,7 +40,7 @@ section[data-testid="stSidebar"]{display:none!important;}
   letter-spacing:3px;padding:0.25rem 0.7rem;border-radius:3px;text-transform:uppercase;}
 .divider{height:1px;background:rgba(233,32,118,0.15);margin-bottom:0.6rem;}
 .card{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
-  border-radius:14px;padding:1.5rem;position:relative;overflow:hidden;}
+  border-radius:14px;padding:1.5rem;position:relative;overflow:hidden;min-height:9.5rem;}
 .card-top{position:absolute;top:0;left:0;right:0;height:3px;
   background:linear-gradient(90deg,#e92076,#63ccca);}
 .card-label{font-size:0.58rem;font-weight:600;color:rgba(255,255,255,0.5);
