@@ -628,18 +628,26 @@ tot_days=total_days()
 forecast=compute_forecast(pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet")), tot)
 
 # ── State ─────────────────────────────────────────────────────────────────────
-if "screen"  not in st.session_state: st.session_state["screen"]=0
-if "locked"  not in st.session_state: st.session_state["locked"]=False
-if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
+if "screen"       not in st.session_state: st.session_state["screen"]=0
+if "last_sw"      not in st.session_state: st.session_state["last_sw"]=_time.time()
+if "vac_start_idx" not in st.session_state: st.session_state["vac_start_idx"]=0
 
-# 60s autorefresh — only needed for screen switching.
-# Vacancy cycling is handled by JavaScript inside components.html(), no Python re-render needed.
+# Screen durations: Omzet/Pipeline 60s, Vacatures 90s
+SCREEN_DURATION = {0: 60, 1: 60, 2: 90}
+
+# Vacancy cycling handled by JS — autorefresh only needed for screen switching
 st_autorefresh(interval=60_000, limit=None, key="tv_autorefresh")
 
-now_t=_time.time()
-if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>58:
-    st.session_state["screen"]=(st.session_state["screen"]+1)%3
-    st.session_state["last_sw"]=now_t
+now_t   = _time.time()
+_scr    = st.session_state["screen"]
+_dur    = SCREEN_DURATION.get(_scr, 60)
+if now_t - st.session_state["last_sw"] > _dur:
+    # When leaving Vacatures, advance start index by vacancies shown (90s / 30s = 3)
+    if _scr == 2:
+        _nv = len(vacs) if vacs else 1
+        st.session_state["vac_start_idx"] = (st.session_state["vac_start_idx"] + 3) % _nv
+    st.session_state["screen"] = (_scr + 1) % 3
+    st.session_state["last_sw"] = now_t
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 logo_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"lincks_logo_fc-wit_def.png")
@@ -695,15 +703,15 @@ def render_nav():
     n1,n2,n3=st.columns([1,1,2])
     with n1:
         if st.button("Omzet", key="b0"):
-            st.session_state.update({"screen":0,"locked":False,"last_sw":_time.time()})
+            st.session_state.update({"screen":0,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n2:
         if st.button("Pipeline", key="b1"):
-            st.session_state.update({"screen":1,"locked":False,"last_sw":_time.time()})
+            st.session_state.update({"screen":1,"last_sw":_time.time()})
             st.rerun(scope="app")
     with n3:
         if st.button("★  Vacatures", key="b2"):
-            st.session_state.update({"screen":2,"locked":True,"vac_idx":0,"vac_ts":_time.time()})
+            st.session_state.update({"screen":2,"last_sw":_time.time()})
             st.rerun(scope="app")
     st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
@@ -1112,7 +1120,7 @@ body{background:transparent;font-family:'Inter',sans-serif;color:white;overflow:
   </div>
 </div>
 <script>
-var idx=0,n={_n},t=Date.now();
+var idx={st.session_state["vac_start_idx"]%max(_n,1)},n={_n},t=Date.now();
 function show(i){{
   document.querySelectorAll('.vac-card').forEach(function(el,j){{el.style.display=j===i?'block':'none';}});
   document.querySelectorAll('[id^="d"]').forEach(function(el,j){{el.className='dot'+(j===i?' on':'');}});
@@ -1121,7 +1129,8 @@ function show(i){{
 }}
 function next(){{show((idx+1)%n);}}
 function prev(){{show((idx-1+n)%n);}}
-setInterval(function(){{if(Date.now()-t>=4000){{show((idx+1)%n);}}}},500);
+show(idx);
+setInterval(function(){{if(Date.now()-t>=30000){{show((idx+1)%n);}}}},1000);
 </script>
 </body></html>"""
             components.html(_vac_html, height=680, scrolling=False)
