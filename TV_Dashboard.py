@@ -629,21 +629,17 @@ forecast=compute_forecast(pd.read_parquet(os.path.join(DATA_DIR,"invoices.parque
 
 # ── State ─────────────────────────────────────────────────────────────────────
 if "screen"  not in st.session_state: st.session_state["screen"]=0
-if "vac_idx" not in st.session_state: st.session_state["vac_idx"]=0
 if "locked"  not in st.session_state: st.session_state["locked"]=False
 if "last_sw" not in st.session_state: st.session_state["last_sw"]=_time.time()
-if "vac_ts"  not in st.session_state: st.session_state["vac_ts"]=_time.time()
 
-# Auto-rerun every 10s so the 60s screen-switch and 6s vacancy-cycle checks fire on time
-st_autorefresh(interval=10_000, limit=None, key="tv_autorefresh")
+# 60s autorefresh — only needed for screen switching.
+# Vacancy cycling is handled by JavaScript inside components.html(), no Python re-render needed.
+st_autorefresh(interval=60_000, limit=None, key="tv_autorefresh")
 
 now_t=_time.time()
-if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>60:
+if not st.session_state["locked"] and now_t-st.session_state["last_sw"]>58:
     st.session_state["screen"]=(st.session_state["screen"]+1)%3
     st.session_state["last_sw"]=now_t
-if st.session_state["screen"]==2 and now_t-st.session_state["vac_ts"]>4:
-    st.session_state["vac_idx"]=(st.session_state["vac_idx"]+1)
-    st.session_state["vac_ts"]=now_t
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 logo_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"lincks_logo_fc-wit_def.png")
@@ -1003,116 +999,132 @@ def render_screen():
                     <div class="card-val pink" style="font-size:2rem">{tth}</div>
                 </div>""", unsafe_allow_html=True)
 
-    # ── VACATURES ────────────────────────────────────────────────────────────
+    # ── VACATURES — rendered in components.html() so JS handles cycling (no re-render) ──
     elif scr==2:
         if not vacs:
             st.info("Geen actieve vacatures.")
         else:
-            idx=st.session_state["vac_idx"]%len(vacs)
-            v=vacs[idx]
-            title    = v.get("jobTitle","—")
-            company  = (v.get("toCompany") or {}).get("name","—")
-            ow       = v.get("owner") or {}
-            cons     = f"{ow.get('firstName','')} {ow.get('lastName','')}".strip() or "—"
-            created  = pd.to_datetime(v.get("creationDate")) if v.get("creationDate") else None
-            days_open= (nl_now()-created.replace(tzinfo=None)).days if created else 0
-            loc      = v.get("workLocation","") or ""
-            if loc in ("None","nan"): loc=""
-            vno      = v.get("vacancyNo","")
-            agency      = v.get("agency","") or ""
-            if agency in ("None","nan"): agency=""
-            raw_intro   = v.get("intro","") or ""
-            # Smart truncate: cut at last complete sentence before 650 chars
             def _smart_trunc(text, mx=650):
                 if not text or len(text)<=mx: return text
                 chunk=text[:mx]; last=max(chunk.rfind('.'),chunk.rfind('!'),chunk.rfind('?'))
                 if last>mx//3: return chunk[:last+1]
                 sp=chunk.rfind(' '); return (chunk[:sp]+'…') if sp>0 else chunk+'…'
-            intro = _smart_trunc(raw_intro)
 
-            days_c="#e92076" if days_open>60 else "#f5a623" if days_open>30 else "#00d4c8"
-            pills=""
-            if loc and loc not in ("None","nan",""): pills+=f'<span class="pill">📍 {loc}</span>'
+            # Pre-render all vacancy cards
+            _cards_html = ""
+            _sidebar_html = ""
+            for _i,_v in enumerate(vacs):
+                _title  = _v.get("jobTitle","—")
+                _co     = (_v.get("toCompany") or {}).get("name","—")
+                _ow     = _v.get("owner") or {}
+                _cons   = f"{_ow.get('firstName','')} {_ow.get('lastName','')}".strip() or "—"
+                _cr     = pd.to_datetime(_v.get("creationDate")) if _v.get("creationDate") else None
+                _do     = (nl_now()-_cr.replace(tzinfo=None)).days if _cr else 0
+                _loc    = _v.get("workLocation","") or ""
+                if _loc in ("None","nan"): _loc=""
+                _vno    = _v.get("vacancyNo","")
+                _ag     = _v.get("agency","") or ""
+                if _ag in ("None","nan"): _ag=""
+                _intro  = _smart_trunc(_v.get("intro","") or "")
+                _dc     = "#e92076" if _do>60 else "#f5a623" if _do>30 else "#00d4c8"
+                _pills  = f'<span class="pill">📍 {_loc}</span>' if _loc else ""
+                _ag_span= f"<span style='font-size:0.72rem;color:rgba(255,255,255,0.3);'>· {_ag}</span>" if _ag else ""
+                _intro_h= f"<div style='font-size:1rem;color:rgba(255,255,255,0.55);line-height:1.7;'>{_intro}</div>" if _intro else ""
+                _disp   = "block" if _i==0 else "none"
+                _cards_html += (
+                    f'<div class="vac-card" id="vc{_i}" style="display:{_disp}">'
+                    f'<div class="vac-big">'
+                    f'<div class="vac-num">{_i+1} van {len(vacs)} · vacature {_vno}</div>'
+                    f'<div class="vac-title">{_title}</div>'
+                    f'<div class="vac-company">🏢 {_co}</div>'
+                    f'<div class="pills">{_pills}</div>'
+                    f'<div style="margin:0.8rem 0 1rem;padding:1rem 1.1rem;background:rgba(255,255,255,0.03);border-radius:10px;border-left:2px solid rgba(0,212,200,0.35);">'
+                    f'<div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;">'
+                    f'<span style="font-size:0.95rem;font-weight:600;color:white;">👤 {_cons}</span>{_ag_span}</div>'
+                    f'<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.7rem;">'
+                    f'<span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{_vno}</span>'
+                    f'<span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{_dc};">⏱ {_do} dagen open</span>'
+                    f'</div>{_intro_h}</div></div></div>'
+                )
+                _cr2 = pd.to_datetime(_v.get("creationDate")) if _v.get("creationDate") else None
+                _do2 = (nl_now()-_cr2.replace(tzinfo=None)).days if _cr2 else 0
+                _dc2 = "#e92076" if _do2>60 else "#f5a623" if _do2>30 else "rgba(255,255,255,0.2)"
+                _cur = ' cur' if _i==0 else ''
+                _sidebar_html += (
+                    f'<div class="vac-sm{_cur}" id="vsm{_i}">'
+                    f'<div class="vac-sm-t">{_title}</div>'
+                    f'<div class="vac-sm-c" style="margin-top:0.15rem;">'
+                    f'<span style="color:rgba(255,255,255,0.45);font-weight:500">{_cons}</span>'
+                    f' · {_co} · <span style="color:{_dc2}">{_do2}d</span></div></div>'
+                )
 
-            dots="".join([f'<div class="dot {"on" if i==idx else ""}"></div>' for i in range(len(vacs))])
+            _dots_html = "".join(f'<div class="dot{"" if _i else " on"}" id="d{_i}"></div>' for _i in range(len(vacs)))
+            _btn = "background:rgba(42,8,69,0.7);border:1px solid rgba(233,32,118,0.3);color:rgba(255,255,255,0.6);border-radius:6px;padding:0.3rem 0.9rem;font-size:0.72rem;cursor:pointer;font-family:Inter,sans-serif;margin-right:0.5rem;"
 
-            # Top row: big total count card + progress indicator
-            ch,_sp=st.columns([1,3])
-            with ch:
-                st.markdown(f"""
-                <a href="https://www.lincks.nl/vacatures" target="_blank" style="text-decoration:none;">
-                  <div style="background:linear-gradient(135deg,rgba(233,32,118,0.15),rgba(0,212,200,0.08));
-                    border:1px solid rgba(233,32,118,0.3);border-radius:14px;padding:0.9rem 1.4rem;
-                    cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:1rem;">
-                    <div>
-                      <div style="font-family:Syne,sans-serif;font-size:2.6rem;font-weight:800;
-                        color:#e92076;line-height:1;">{open_vac_count}</div>
-                      <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:3px;
-                        text-transform:uppercase;margin-top:0.3rem;">open vacatures</div>
-                    </div>
-                    <div style="font-size:0.7rem;color:rgba(255,255,255,0.2);margin-left:auto;">
-                      lincks.nl/vacatures ↗
-                    </div>
-                  </div>
-                </a>
-                """, unsafe_allow_html=True)
-
-            st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
-
-            cm,cl=st.columns([2.5,1])
-            with cm:
-                st.markdown(f"""
-                <div class="vac-big">
-                  <div class="vac-num">{idx+1} van {len(vacs)} · vacature {vno}</div>
-                  <div class="vac-title">{title}</div>
-                  <div class="vac-company">🏢 {company}</div>
-                  <div class="pills">{pills}</div>
-                  <div style="margin:0.8rem 0 1rem;padding:1rem 1.1rem;
-                    background:rgba(255,255,255,0.03);border-radius:10px;
-                    border-left:2px solid rgba(0,212,200,0.35);">
-                    <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;">
-                      <span style="font-size:0.95rem;font-weight:600;color:white;">👤 {cons}</span>
-                      {"<span style='font-size:0.72rem;color:rgba(255,255,255,0.3);'>· " + agency + "</span>" if agency else ""}
-                    </div>
-                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.7rem;">
-                      <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:rgba(255,255,255,0.45);">#{vno}</span>
-                      <span style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.2rem 0.7rem;font-size:0.7rem;color:{days_c};">⏱ {days_open} dagen open</span>
-                    </div>
-                    {("<div style='font-size:1rem;color:rgba(255,255,255,0.55);line-height:1.7;'>" + intro + "</div>") if intro else ""}</div>
-                </div>
-                <div class="dots">{dots}</div>
-                """, unsafe_allow_html=True)
-                b1,b2,_=st.columns([1,1,4])
-                with b1:
-                    if st.button("← Vorige",key="vp"):
-                        st.session_state["vac_idx"]=(idx-1)%len(vacs)
-                        st.session_state["vac_ts"]=_time.time()
-                        st.rerun(scope="fragment")
-                with b2:
-                    if st.button("Volgende →",key="vn"):
-                        st.session_state["vac_idx"]=(idx+1)%len(vacs)
-                        st.session_state["vac_ts"]=_time.time()
-                        st.rerun(scope="fragment")
-
-            with cl:
-                st.markdown('<div style="font-size:0.52rem;color:rgba(255,255,255,0.18);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.6rem;padding-left:0.3rem">Per recruiter</div>', unsafe_allow_html=True)
-                for i,vv in enumerate(vacs):
-                    t2  = vv.get("jobTitle","—")
-                    c2  = (vv.get("toCompany") or {}).get("name","—")
-                    ow2 = vv.get("owner") or {}
-                    r2  = f"{ow2.get('firstName','')} {ow2.get('lastName','')}".strip() or "—"
-                    cr2 = pd.to_datetime(vv.get("creationDate")) if vv.get("creationDate") else None
-                    do2 = (nl_now()-cr2.replace(tzinfo=None)).days if cr2 else 0
-                    cls2= "vac-sm cur" if i==idx else "vac-sm"
-                    dc2 = "#e92076" if do2>60 else "#f5a623" if do2>30 else "rgba(255,255,255,0.2)"
-                    st.markdown(f"""<div class="{cls2}">
-                        <div class="vac-sm-t">{t2}</div>
-                        <div class="vac-sm-c" style="margin-top:0.15rem;">
-                          <span style="color:rgba(255,255,255,0.45);font-weight:500">{r2}</span>
-                          · {c2}
-                          · <span style="color:{dc2}">{do2}d</span>
-                        </div>
-                    </div>""", unsafe_allow_html=True)
+            _vac_css = """
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:transparent;font-family:'Inter',sans-serif;color:white;overflow:hidden;}
+.vac-big{background:linear-gradient(145deg,#1e0535 0%,#2a0845 60%,#180329 100%);
+  border:1px solid rgba(233,32,118,0.3);border-radius:18px;padding:2.2rem 2.5rem;
+  position:relative;overflow:hidden;min-height:320px;animation:si 0.4s ease;}
+@keyframes si{from{opacity:0;transform:translateX(30px);}to{opacity:1;transform:translateX(0);}}
+.vac-big::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,#e92076 0%,#63ccca 50%,transparent 100%);}
+.vac-num{font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.7rem;}
+.vac-title{font-family:'Syne',sans-serif;font-size:2.4rem;font-weight:800;color:white;line-height:1.1;margin-bottom:0.6rem;}
+.vac-company{font-size:1rem;color:#00d4c8;font-weight:600;margin-bottom:0.5rem;}
+.pills{display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;}
+.pill{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:0.3rem 0.85rem;font-size:0.72rem;color:rgba(255,255,255,0.55);}
+.dots{display:flex;gap:0.35rem;justify-content:center;margin-top:0.8rem;}
+.dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.1);}
+.dot.on{background:#e92076;width:18px;border-radius:3px;}
+.vac-sm{background:rgba(42,8,69,0.5);border:1px solid rgba(233,32,118,0.15);
+  border-left:2px solid rgba(233,32,118,0.4);border-radius:8px;padding:0.65rem 0.9rem;margin-bottom:0.4rem;}
+.vac-sm.cur{border-left-color:#63ccca;background:rgba(99,204,202,0.05);}
+.vac-sm-t{font-size:0.8rem;font-weight:600;color:white;margin-bottom:0.1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.vac-sm-c{font-size:0.65rem;color:rgba(255,255,255,0.4);}
+"""
+            _n = len(vacs)
+            _vac_html = f"""<!DOCTYPE html><html><head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>{_vac_css}</style>
+</head><body>
+<a href="https://www.lincks.nl/vacatures" target="_blank" style="text-decoration:none;display:block;margin-bottom:0.8rem;">
+  <div style="background:linear-gradient(135deg,rgba(233,32,118,0.15),rgba(0,212,200,0.08));border:1px solid rgba(233,32,118,0.3);border-radius:14px;padding:0.9rem 1.4rem;display:inline-flex;align-items:center;gap:1rem;">
+    <div style="font-family:Syne,sans-serif;font-size:2.6rem;font-weight:800;color:#e92076;line-height:1;">{open_vac_count}</div>
+    <div><div style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:3px;text-transform:uppercase;">open vacatures</div>
+    <div style="font-size:0.7rem;color:rgba(255,255,255,0.2);margin-top:0.2rem;">lincks.nl/vacatures ↗</div></div>
+  </div>
+</a>
+<div style="display:grid;grid-template-columns:2.5fr 1fr;gap:1.2rem">
+  <div>
+    {_cards_html}
+    <div class="dots">{_dots_html}</div>
+    <div style="margin-top:0.5rem">
+      <button onclick="prev()" style="{_btn}">← Vorige</button>
+      <button onclick="next()" style="{_btn}">Volgende →</button>
+    </div>
+  </div>
+  <div>
+    <div style="font-size:0.52rem;color:rgba(255,255,255,0.18);letter-spacing:3px;text-transform:uppercase;margin-bottom:0.6rem;">Per recruiter</div>
+    {_sidebar_html}
+  </div>
+</div>
+<script>
+var idx=0,n={_n},t=Date.now();
+function show(i){{
+  document.querySelectorAll('.vac-card').forEach(function(el,j){{el.style.display=j===i?'block':'none';}});
+  document.querySelectorAll('[id^="d"]').forEach(function(el,j){{el.className='dot'+(j===i?' on':'');}});
+  document.querySelectorAll('[id^="vsm"]').forEach(function(el,j){{el.className='vac-sm'+(j===i?' cur':'');}});
+  idx=i;t=Date.now();
+}}
+function next(){{show((idx+1)%n);}}
+function prev(){{show((idx-1+n)%n);}}
+setInterval(function(){{if(Date.now()-t>=4000){{show((idx+1)%n);}}}},500);
+</script>
+</body></html>"""
+            components.html(_vac_html, height=680, scrolling=False)
 
 render_screen()
 
