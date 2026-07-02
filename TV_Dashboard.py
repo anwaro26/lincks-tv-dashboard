@@ -549,10 +549,16 @@ def load_pipeline():
 
         s["geplaatst"] = len(cur_pl)   # placements parquet, gefilterd op kwartaal
 
-        # Placements per month — last 6 months for the trend bar chart
+        # Placements per month — last 6 months, each with the same month one year
+        # earlier for a year-over-year comparison. pl is already RHaS-filtered.
         last6 = sorted(pl["month"].dropna().unique())[-6:]
-        monthly = pl[pl["month"].isin(last6)].groupby("month").size()
-        s["monthly"] = [(m, int(monthly.get(m, 0))) for m in last6]
+        def prev_year_month(m):
+            y, mm = m.split("-")
+            return f"{int(y)-1}-{mm}"
+        cur_counts  = pl[pl["month"].isin(last6)].groupby("month").size()
+        prev_months = [prev_year_month(m) for m in last6]
+        prev_counts = pl[pl["month"].isin(prev_months)].groupby("month").size()
+        s["monthly"] = [(m, int(cur_counts.get(m, 0)), int(prev_counts.get(prev_year_month(m), 0))) for m in last6]
 
         if not cur_pl.empty:
             ttf = (cur_pl["creation_date"]-cur_pl["vacancy_created"]).dt.days.dropna()
@@ -1046,17 +1052,22 @@ def render_screen():
         cm1,cm2=st.columns([1.6,1])
         with cm1:
             monthly=p.get("monthly",[])
-            mlabels=[m for m,_ in monthly]
-            mvals=[v for _,v in monthly]
+            mlabels=[m for m,_,_ in monthly]
+            cur=[c for _,c,_ in monthly]
+            prev=[pv for _,_,pv in monthly]
             st.markdown("<div style='font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;"
                         "text-transform:uppercase;margin-bottom:0.3rem'>Plaatsingen per maand</div>",
                         unsafe_allow_html=True)
-            fig_m=go.Figure(go.Bar(x=mlabels,y=mvals,marker_color="#00e5a0",
-                text=mvals,textposition="outside",
-                textfont=dict(size=12,color="rgba(255,255,255,0.7)",family="Inter")))
-            fig_m.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
-                font_color="rgba(255,255,255,0.5)",
-                margin=dict(l=0,r=10,t=25,b=0),height=190,
+            fig_m=go.Figure()
+            fig_m.add_trace(go.Bar(x=mlabels,y=prev,name="Vorig jaar",marker_color="rgba(255,255,255,0.15)",
+                text=prev,textposition="outside",textfont=dict(size=10,color="rgba(255,255,255,0.4)")))
+            fig_m.add_trace(go.Bar(x=mlabels,y=cur,name="Dit jaar",marker_color="#00e5a0",
+                text=cur,textposition="outside",textfont=dict(size=11,color="white")))
+            fig_m.update_layout(barmode="group",bargap=0.3,bargroupgap=0.1,
+                legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="right",x=1,
+                    font=dict(color="rgba(255,255,255,0.35)",size=10)),
+                height=150,margin=dict(l=0,r=10,t=20,b=0),
+                plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",font_color="rgba(255,255,255,0.4)",
                 xaxis=dict(tickfont=dict(size=11,family="Inter"),gridcolor="rgba(0,0,0,0)"),
                 yaxis=dict(tickfont=dict(size=10),gridcolor="rgba(255,255,255,0.05)",zeroline=False))
             st.plotly_chart(fig_m,use_container_width=True)
@@ -1067,16 +1078,16 @@ def render_screen():
             r1=_pct(p["gesprek"],p["voorgesteld"])
             r2=_pct(p["aanbod"],p["gesprek"])
             r3=_pct(p["geplaatst_matches"],p["aanbod"])
-            st.markdown(f"""<div class="card" style="height:190px;display:flex;flex-direction:column;justify-content:center">
+            st.markdown(f"""<div class="card" style="height:150px;padding:1rem 1.2rem;display:flex;flex-direction:column;justify-content:center">
                 <div class="card-top"></div>
-                <div class="card-label" style="margin-bottom:0.5rem">Conversieratio's</div>
-                <div style="font-family:Inter,sans-serif;font-size:0.95rem;line-height:2.0;color:rgba(255,255,255,0.85)">
-                    Voorgesteld → Gesprek &nbsp;<b style="color:#e92076">{r1}</b><br>
-                    Gesprek → Aanbod &nbsp;<b style="color:#a78bfa">{r2}</b><br>
-                    Aanbod → Geplaatst &nbsp;<b style="color:#00e5a0">{r3}</b>
+                <div class="card-label" style="margin-bottom:0.4rem">Conversieratio's</div>
+                <div style="font-family:Inter,sans-serif;font-size:0.8rem;line-height:1.9;color:rgba(255,255,255,0.85)">
+                    Voorgesteld → Gesprek &nbsp;<b style="font-size:1rem;color:#e92076">{r1}</b><br>
+                    Gesprek → Aanbod &nbsp;<b style="font-size:1rem;color:#a78bfa">{r2}</b><br>
+                    Aanbod → Geplaatst &nbsp;<b style="font-size:1rem;color:#00e5a0">{r3}</b>
                 </div>
                 <div style="font-size:0.5rem;color:rgba(255,255,255,0.25);letter-spacing:1px;
-                    text-transform:uppercase;margin-top:0.5rem">op basis van matchstatussen</div>
+                    text-transform:uppercase;margin-top:0.4rem">op basis van matchstatussen</div>
             </div>""", unsafe_allow_html=True)
 
     # ── VACATURES — rendered in components.html() so JS handles cycling (no re-render) ──
