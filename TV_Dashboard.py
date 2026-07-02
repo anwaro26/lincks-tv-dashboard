@@ -469,20 +469,37 @@ def load_invoice_df():
     return pd.DataFrame(rows), daily_days, daily_rev
 
 def classify_match_stage(row):
-    """Classify match into funnel stage — same logic as internal dashboard."""
+    """Strict funnel stage classification. Returns highest stage reached."""
     sn = str(row.get("status_display") or row.get("status_name") or "").strip()
-    if row.get("has_job") or row.get("is_successfully_filled"): return "5. Geplaatst"
-    if any(sn.startswith(x) for x in ["5.1","5.2","5.3","5.4","5.5","5.6"]): return "5. Geplaatst"
-    if any(sn.startswith(x) for x in ["5.0","6.6","6.7"]): return "4. Aanbod"
-    if any(sn.startswith(x) for x in ["3.","4.","6.3","6.4","6.5","6.8","6.9"]): return "3. 1e gesprek klant"
-    return "2. Op gesprek"
 
-STAGE_RANK = {"2. Op gesprek":1,"3. 1e gesprek klant":2,"4. Aanbod":3,"5. Geplaatst":4}
+    # 5. Geplaatst — alleen echte plaatsingsstatussen of een gekoppelde job
+    if row.get("has_job") or row.get("is_successfully_filled"):
+        return "5. Geplaatst"
+    if any(sn.startswith(x) for x in ["5.1","5.2","5.3","5.4","5.5","5.6"]):
+        return "5. Geplaatst"
+
+    # 4. Aanbod — ALLEEN expliciete aanbod status (5.0). 6.6/6.7 NIET meer meetellen
+    if sn.startswith("5.0"):
+        return "4. Aanbod"
+
+    # 3. Gesprek bij klant — 4.x + afwijzingen ná gesprek bij klant (6.3, 6.4)
+    if any(sn.startswith(x) for x in ["4.","6.3","6.4"]):
+        return "3. Gesprek bij klant"
+
+    # 2. Voorgesteld bij opdrachtgever — 3.x + afwijzingen op voorstel-niveau (6.5, 6.8, 6.6)
+    if any(sn.startswith(x) for x in ["3.","6.5","6.8","6.6"]):
+        return "2. Voorgesteld"
+
+    # 1. Instroom — al het overige (1.x, 2.x, 6.1, 6.2, 6.7, 6.10, 6.11, 7.x)
+    return "1. Instroom"
+
+STAGE_RANK = {"1. Instroom":1,"2. Voorgesteld":2,"3. Gesprek bij klant":3,"4. Aanbod":4,"5. Geplaatst":5}
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_pipeline():
     """Load pipeline from matches parquet using proven stage classification."""
-    s={"op_gesprek":0,"eerste_gesprek":0,"aanbod":0,"geplaatst":0,"avg_ttf":None,"avg_tth":None}
+    s={"instroom":0,"voorgesteld":0,"gesprek":0,"aanbod":0,"geplaatst":0,
+       "monthly":[],"avg_ttf":None,"avg_tth":None}
     try:
         matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
         matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
@@ -491,36 +508,45 @@ def load_pipeline():
         # Stage funnel = active pipeline regardless of when the match was created.
         # Use rolling 90-day window so old closed matches don't inflate counts.
         cutoff = nl_now() - timedelta(days=90)
-        active_m = matches[matches["creation_date"] >= cutoff].copy()
+        cur_m = matches[matches["creation_date"] >= cutoff].copy()
 
         # Fall back to previous month if current window is empty (parquet not yet synced)
-        if active_m.empty:
-            active_m = matches[matches["month"].isin([CURRENT_MONTH, PREV_MONTH])].copy()
+        if cur_m.empty:
+            cur_m = matches[matches["month"].isin([CURRENT_MONTH, PREV_MONTH])].copy()
 
-        if not active_m.empty:
-            # Per candidate take highest stage reached
-            active_m["stage"] = active_m.apply(classify_match_stage, axis=1)
-            active_m["stage_rank"] = active_m["stage"].map(STAGE_RANK).fillna(0).astype(int)
-            best = active_m.loc[active_m.groupby("candidate_id")["stage_rank"].idxmax()]
-            stage_counts = best["stage"].value_counts()
-            s["op_gesprek"]    = int(stage_counts.get("2. Op gesprek", 0))
-            s["eerste_gesprek"]= int(stage_counts.get("3. 1e gesprek klant", 0))
-            s["aanbod"]        = int(stage_counts.get("4. Aanbod", 0))
-            s["geplaatst"]     = int(stage_counts.get("5. Geplaatst", 0))
+        if not cur_m.empty:
+            # Per candidate take highest stage reached, then count CUMULATIVELY so the
+            # funnel is always monotonically decreasing (a placed candidate also counts
+            # toward every earlier stage).
+            cur_m["stage"] = cur_m.apply(classify_match_stage, axis=1)
+            cur_m["stage_rank"] = cur_m["stage"].map(STAGE_RANK).fillna(0).astype(int)
+            best = cur_m.loc[cur_m.groupby("candidate_id")["stage_rank"].idxmax()]
+            s["instroom"]    = len(best)
+            s["voorgesteld"] = int((best["stage_rank"] >= 2).sum())
+            s["gesprek"]     = int((best["stage_rank"] >= 3).sum())
+            s["aanbod"]      = int((best["stage_rank"] >= 4).sum())
 
-        # Placements parquet for geplaatst + TTF/TTH — rolling quarter (same window as funnel)
+        # Placements parquet — geplaatst comes STRICTLY from here (quarter window),
+        # not from the match funnel, which overstated the count.
         pl = pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
         pl["creation_date"]  = pd.to_datetime(pl.get("creation_date",""), errors="coerce")
         pl["vacancy_created"]= pd.to_datetime(pl.get("vacancy_created",""), errors="coerce")
         pl["match_created"]  = pd.to_datetime(pl.get("match_created",""), errors="coerce")
+        pl["month"] = pl["creation_date"].dt.strftime("%Y-%m")
         quarter_cutoff = nl_now() - timedelta(days=90)
         cur_pl = pl[pl["creation_date"] >= quarter_cutoff].copy()
         # Fall back to current month only if quarter is somehow empty
         if cur_pl.empty:
-            pl["month"] = pl["creation_date"].dt.strftime("%Y-%m")
             cur_pl = pl[pl["month"] == CURRENT_MONTH].copy()
+
+        s["geplaatst"] = len(cur_pl)   # placements parquet, gefilterd op kwartaal
+
+        # Placements per month — last 6 months for the trend bar chart
+        last6 = sorted(pl["month"].dropna().unique())[-6:]
+        monthly = pl[pl["month"].isin(last6)].groupby("month").size()
+        s["monthly"] = [(m, int(monthly.get(m, 0))) for m in last6]
+
         if not cur_pl.empty:
-            s["geplaatst"] = max(s["geplaatst"], len(cur_pl))
             ttf = (cur_pl["creation_date"]-cur_pl["vacancy_created"]).dt.days.dropna()
             tth = (cur_pl["creation_date"]-cur_pl["match_created"]).dt.days.dropna()
             ttf = ttf[(ttf>0)&(ttf<500)]
@@ -954,13 +980,12 @@ def render_screen():
             Kwartaal · {q_start} – {q_end}
         </div>""", unsafe_allow_html=True)
 
-        instroom = p["op_gesprek"] + p["eerste_gesprek"] + p["aanbod"] + p["geplaatst"]
         kpis=[
-            ("Instroom",         instroom,             "#f5a623"),
-            ("Op Gesprek",       p["op_gesprek"],      "#00d4c8"),
-            ("Gesprek Bij Klant",p["eerste_gesprek"],  "#e92076"),
-            ("Heeft Aanbod",     p["aanbod"],          "#a78bfa"),
-            ("Geplaatst ✓",      p["geplaatst"],       "#00e5a0"),
+            ("Instroom",                     p["instroom"],    "#f5a623"),
+            ("Voorgesteld bij opdrachtgever",p["voorgesteld"], "#00d4c8"),
+            ("Gesprek bij klant",            p["gesprek"],     "#e92076"),
+            ("Heeft Aanbod",                 p["aanbod"],      "#a78bfa"),
+            ("Geplaatst ✓",                  p["geplaatst"],   "#00e5a0"),
         ]
         cols=st.columns(5)
         for col,(lbl,val,clr) in zip(cols,kpis):
@@ -974,8 +999,8 @@ def render_screen():
 
         cf,ct=st.columns([1.4,1])
         with cf:
-            lbls=["Instroom","Op Gesprek","Gesprek Bij Klant","Aanbod","Geplaatst"]
-            vals=[instroom,p["op_gesprek"],p["eerste_gesprek"],p["aanbod"],p["geplaatst"]]
+            lbls=["Instroom","Voorgesteld","Gesprek bij klant","Aanbod","Geplaatst"]
+            vals=[p["instroom"],p["voorgesteld"],p["gesprek"],p["aanbod"],p["geplaatst"]]
             clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
@@ -1008,6 +1033,39 @@ def render_screen():
                     <div class="card-label">Gem. Time to Hire</div>
                     <div class="card-val pink" style="font-size:2rem">{tth}</div>
                 </div>""", unsafe_allow_html=True)
+
+        # ── Second row: placements-per-month trend + conversion ratios ──
+        cm1,cm2=st.columns([1.6,1])
+        with cm1:
+            monthly=p.get("monthly",[])
+            mlabels=[m for m,_ in monthly]
+            mvals=[v for _,v in monthly]
+            st.markdown("<div style='font-size:0.58rem;color:rgba(255,255,255,0.2);letter-spacing:3px;"
+                        "text-transform:uppercase;margin-bottom:0.3rem'>Plaatsingen per maand</div>",
+                        unsafe_allow_html=True)
+            fig_m=go.Figure(go.Bar(x=mlabels,y=mvals,marker_color="#00e5a0",
+                text=mvals,textposition="outside",
+                textfont=dict(size=12,color="rgba(255,255,255,0.7)",family="Inter")))
+            fig_m.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
+                font_color="rgba(255,255,255,0.5)",
+                margin=dict(l=10,r=10,t=20,b=10),height=220,
+                xaxis=dict(tickfont=dict(size=11,family="Inter"),gridcolor="rgba(0,0,0,0)"),
+                yaxis=dict(tickfont=dict(size=10),gridcolor="rgba(255,255,255,0.05)",zeroline=False))
+            st.plotly_chart(fig_m,use_container_width=True)
+        with cm2:
+            def _pct(num,den): return f"{num/den*100:.0f}%" if den else "—"
+            r1=_pct(p["gesprek"],p["voorgesteld"])
+            r2=_pct(p["aanbod"],p["gesprek"])
+            r3=_pct(p["geplaatst"],p["aanbod"])
+            st.markdown(f"""<div class="card" style="height:220px;display:flex;flex-direction:column;justify-content:center">
+                <div class="card-top"></div>
+                <div class="card-label" style="margin-bottom:0.7rem">Conversieratio's</div>
+                <div style="font-family:Inter,sans-serif;font-size:0.95rem;line-height:2.2;color:rgba(255,255,255,0.85)">
+                    Voorgesteld → Gesprek &nbsp;<b style="color:#e92076">{r1}</b><br>
+                    Gesprek → Aanbod &nbsp;<b style="color:#a78bfa">{r2}</b><br>
+                    Aanbod → Geplaatst &nbsp;<b style="color:#00e5a0">{r3}</b>
+                </div>
+            </div>""", unsafe_allow_html=True)
 
     # ── VACATURES — rendered in components.html() so JS handles cycling (no re-render) ──
     elif scr==2:
