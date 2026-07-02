@@ -51,8 +51,8 @@ section[data-testid="stSidebar"]{display:none!important;}
 .prog{height:3px;background:rgba(255,255,255,0.08);border-radius:2px;margin-top:1rem;overflow:hidden;}
 .prog-fill{height:100%;background:linear-gradient(90deg,#e92076,#63ccca);border-radius:2px;}
 .fkpi{background:linear-gradient(135deg,#2a0845,#1e0535);border:1px solid rgba(233,32,118,0.3);
-  border-radius:12px;padding:1.5rem 1rem;text-align:center;}
-.fkpi-val{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;line-height:1;}
+  border-radius:12px;padding:1.2rem 1rem;text-align:center;}
+.fkpi-val{font-family:'Syne',sans-serif;font-size:2.6rem;font-weight:800;line-height:1;}
 .fkpi-lbl{font-size:0.58rem;color:rgba(255,255,255,0.5);letter-spacing:2px;
   text-transform:uppercase;margin-top:0.5rem;}
 
@@ -499,7 +499,7 @@ STAGE_RANK = {"1. Instroom":1,"2. Voorgesteld":2,"3. Gesprek bij klant":3,"4. Aa
 def load_pipeline():
     """Load pipeline from matches parquet using proven stage classification."""
     s={"instroom":0,"voorgesteld":0,"gesprek":0,"aanbod":0,"geplaatst":0,
-       "monthly":[],"avg_ttf":None,"avg_tth":None}
+       "geplaatst_matches":0,"monthly":[],"avg_ttf":None,"avg_tth":None}
     try:
         matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
         matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
@@ -525,10 +525,18 @@ def load_pipeline():
             s["voorgesteld"] = int((best["stage_rank"] >= 2).sum())
             s["gesprek"]     = int((best["stage_rank"] >= 3).sum())
             s["aanbod"]      = int((best["stage_rank"] >= 4).sum())
+            # Matches-based geplaatst — ONLY for the conversion card, so all four
+            # ratios share one source (matches) and stay internally consistent (<=100%).
+            s["geplaatst_matches"] = int((best["stage_rank"] >= 5).sum())
 
         # Placements parquet — geplaatst comes STRICTLY from here (quarter window),
         # not from the match funnel, which overstated the count.
         pl = pd.read_parquet(os.path.join(DATA_DIR,"placements.parquet"))
+        # Drop RHaS billing records ("... maandelijks" / "... Facturatie") — monthly
+        # subscription invoices in Carerix, not real placements. Also fixes TTF/TTH
+        # (billing rows carry nonsense vacancy/match dates).
+        mask_rhas_billing = pl["candidate_name"].str.lower().str.contains("maandelijks|facturatie", na=False)
+        pl = pl[~mask_rhas_billing].copy()
         pl["creation_date"]  = pd.to_datetime(pl.get("creation_date",""), errors="coerce")
         pl["vacancy_created"]= pd.to_datetime(pl.get("vacancy_created",""), errors="coerce")
         pl["match_created"]  = pd.to_datetime(pl.get("match_created",""), errors="coerce")
@@ -997,7 +1005,7 @@ def render_screen():
 
         st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-        cf,ct=st.columns([1.4,1])
+        cf,ct=st.columns([1.5,1])
         with cf:
             lbls=["Instroom","Voorgesteld","Gesprek bij klant","Aanbod","Geplaatst"]
             vals=[p["instroom"],p["voorgesteld"],p["gesprek"],p["aanbod"],p["geplaatst"]]
@@ -1008,7 +1016,7 @@ def render_screen():
                 textfont=dict(size=14,color="white",family="Inter")))
             fig_f.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
                 font_color="rgba(255,255,255,0.5)",
-                margin=dict(l=160,r=40,t=10,b=10),height=300,
+                margin=dict(l=140,r=30,t=5,b=5),height=260,
                 yaxis=dict(tickfont=dict(size=12,family="Inter")))
             st.plotly_chart(fig_f,use_container_width=True)
 
@@ -1048,23 +1056,27 @@ def render_screen():
                 textfont=dict(size=12,color="rgba(255,255,255,0.7)",family="Inter")))
             fig_m.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
                 font_color="rgba(255,255,255,0.5)",
-                margin=dict(l=10,r=10,t=20,b=10),height=220,
+                margin=dict(l=0,r=10,t=25,b=0),height=190,
                 xaxis=dict(tickfont=dict(size=11,family="Inter"),gridcolor="rgba(0,0,0,0)"),
                 yaxis=dict(tickfont=dict(size=10),gridcolor="rgba(255,255,255,0.05)",zeroline=False))
             st.plotly_chart(fig_m,use_container_width=True)
         with cm2:
             def _pct(num,den): return f"{num/den*100:.0f}%" if den else "—"
+            # All ratios from ONE source (matches, cumulative) so they stay consistent
+            # and <=100%. The big Geplaatst KPI stays placements-based (business number).
             r1=_pct(p["gesprek"],p["voorgesteld"])
             r2=_pct(p["aanbod"],p["gesprek"])
-            r3=_pct(p["geplaatst"],p["aanbod"])
-            st.markdown(f"""<div class="card" style="height:220px;display:flex;flex-direction:column;justify-content:center">
+            r3=_pct(p["geplaatst_matches"],p["aanbod"])
+            st.markdown(f"""<div class="card" style="height:190px;display:flex;flex-direction:column;justify-content:center">
                 <div class="card-top"></div>
-                <div class="card-label" style="margin-bottom:0.7rem">Conversieratio's</div>
-                <div style="font-family:Inter,sans-serif;font-size:0.95rem;line-height:2.2;color:rgba(255,255,255,0.85)">
+                <div class="card-label" style="margin-bottom:0.5rem">Conversieratio's</div>
+                <div style="font-family:Inter,sans-serif;font-size:0.95rem;line-height:2.0;color:rgba(255,255,255,0.85)">
                     Voorgesteld → Gesprek &nbsp;<b style="color:#e92076">{r1}</b><br>
                     Gesprek → Aanbod &nbsp;<b style="color:#a78bfa">{r2}</b><br>
                     Aanbod → Geplaatst &nbsp;<b style="color:#00e5a0">{r3}</b>
                 </div>
+                <div style="font-size:0.5rem;color:rgba(255,255,255,0.25);letter-spacing:1px;
+                    text-transform:uppercase;margin-top:0.5rem">op basis van matchstatussen</div>
             </div>""", unsafe_allow_html=True)
 
     # ── VACATURES — rendered in components.html() so JS handles cycling (no re-render) ──
