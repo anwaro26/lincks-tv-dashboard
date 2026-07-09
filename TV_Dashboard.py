@@ -478,19 +478,20 @@ def classify_match_stage(row):
     if any(sn.startswith(x) for x in ["5.1","5.2","5.3","5.4","5.5","5.6"]):
         return "5. Geplaatst"
 
-    # 4. Aanbod — ALLEEN expliciete aanbod status (5.0). 6.6/6.7 NIET meer meetellen
-    if sn.startswith("5.0"):
+    # 4. Aanbod — expliciete aanbod status (5.0) + afwijzingen ná aanbod (6.6, 6.7).
+    # Carerix slaat 5.0 vaak over, dus zonder 6.6/6.7 telde aanbod te laag uit.
+    if sn.startswith("5.0") or any(sn.startswith(x) for x in ["6.6","6.7"]):
         return "4. Aanbod"
 
     # 3. Gesprek bij klant — 4.x + afwijzingen ná gesprek bij klant (6.3, 6.4)
     if any(sn.startswith(x) for x in ["4.","6.3","6.4"]):
         return "3. Gesprek bij klant"
 
-    # 2. Voorgesteld bij opdrachtgever — 3.x + afwijzingen op voorstel-niveau (6.5, 6.8, 6.6)
-    if any(sn.startswith(x) for x in ["3.","6.5","6.8","6.6"]):
+    # 2. Voorgesteld bij opdrachtgever — 3.x + afwijzingen op voorstel-niveau (6.5, 6.8)
+    if any(sn.startswith(x) for x in ["3.","6.5","6.8"]):
         return "2. Voorgesteld"
 
-    # 1. Instroom — al het overige (1.x, 2.x, 6.1, 6.2, 6.7, 6.10, 6.11, 7.x)
+    # 1. Instroom — al het overige (1.x, 2.x, 6.1, 6.2, 6.10, 6.11, 7.x)
     return "1. Instroom"
 
 STAGE_RANK = {"1. Instroom":1,"2. Voorgesteld":2,"3. Gesprek bij klant":3,"4. Aanbod":4,"5. Geplaatst":5}
