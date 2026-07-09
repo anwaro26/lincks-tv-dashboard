@@ -573,6 +573,16 @@ def load_pipeline():
             print(f"[PROEFTIJD] {e}")
             s["proeftijd"] = s["geplaatst"]
 
+        # Enforce a monotonic funnel — a candidate cannot reach a later stage
+        # without passing every earlier one. Instroom→Aanbod come from the match
+        # funnel while Geplaatst comes from the placements file, and Carerix often
+        # skips the explicit 'aanbod' (5.0) status, so aanbod undercounted below
+        # geplaatst. Rebuild each stage bottom-up as at least the stage below it.
+        s["aanbod"]      = max(s["aanbod"], s["geplaatst"])
+        s["gesprek"]     = max(s["gesprek"], s["aanbod"])
+        s["voorgesteld"] = max(s["voorgesteld"], s["gesprek"])
+        s["instroom"]    = max(s["instroom"], s["voorgesteld"])
+
         # Placements per month — last 6 months, each with the same month one year
         # earlier for a year-over-year comparison. pl is already RHaS-filtered.
         last6 = sorted(pl["month"].dropna().unique())[-6:]
@@ -1038,9 +1048,9 @@ def render_screen():
 
         cf,ct=st.columns([1.5,1])
         with cf:
-            lbls=["Instroom","Voorgesteld","Gesprek bij klant","Aanbod","Geplaatst","Proeftijd gehaald"]
-            vals=[p["instroom"],p["voorgesteld"],p["gesprek"],p["aanbod"],p["geplaatst"],p["proeftijd"]]
-            clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0","#00c48c"]
+            lbls=["Instroom","Voorgesteld","Gesprek bij klant","Aanbod","Geplaatst"]
+            vals=[p["instroom"],p["voorgesteld"],p["gesprek"],p["aanbod"],p["geplaatst"]]
+            clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
                 connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
@@ -1098,21 +1108,24 @@ def render_screen():
             st.plotly_chart(fig_m,use_container_width=True)
         with cm2:
             def _pct(num,den): return f"{num/den*100:.0f}%" if den else "—"
-            # All ratios from ONE source (matches, cumulative) so they stay consistent
-            # and <=100%. The big Geplaatst KPI stays placements-based (business number).
+            # Ratios use the same monotonic funnel numbers shown on the left, so
+            # every step stays <=100% and internally consistent. Proeftijd gehaald
+            # lives here (not in the funnel) so the funnel doesn't get too narrow.
             r1=_pct(p["gesprek"],p["voorgesteld"])
             r2=_pct(p["aanbod"],p["gesprek"])
-            r3=_pct(p["geplaatst_matches"],p["aanbod"])
-            st.markdown(f"""<div class="card" style="height:150px;padding:1rem 1.2rem;display:flex;flex-direction:column;justify-content:center">
+            r3=_pct(p["geplaatst"],p["aanbod"])
+            r4=_pct(p["proeftijd"],p["geplaatst"])
+            st.markdown(f"""<div class="card" style="height:150px;padding:0.8rem 1.2rem;display:flex;flex-direction:column;justify-content:center">
                 <div class="card-top"></div>
-                <div class="card-label" style="margin-bottom:0.4rem">Conversieratio's</div>
-                <div style="font-family:Inter,sans-serif;font-size:0.8rem;line-height:1.9;color:rgba(255,255,255,0.85)">
-                    Voorgesteld → Gesprek &nbsp;<b style="font-size:1rem;color:#e92076">{r1}</b><br>
-                    Gesprek → Aanbod &nbsp;<b style="font-size:1rem;color:#a78bfa">{r2}</b><br>
-                    Aanbod → Geplaatst &nbsp;<b style="font-size:1rem;color:#00e5a0">{r3}</b>
+                <div class="card-label" style="margin-bottom:0.3rem">Conversieratio's</div>
+                <div style="font-family:Inter,sans-serif;font-size:0.78rem;line-height:1.55;color:rgba(255,255,255,0.85)">
+                    Voorgesteld → Gesprek &nbsp;<b style="font-size:0.95rem;color:#e92076">{r1}</b><br>
+                    Gesprek → Aanbod &nbsp;<b style="font-size:0.95rem;color:#a78bfa">{r2}</b><br>
+                    Aanbod → Geplaatst &nbsp;<b style="font-size:0.95rem;color:#00e5a0">{r3}</b><br>
+                    Geplaatst → Proeftijd gehaald &nbsp;<b style="font-size:0.95rem;color:#00c48c">{r4}</b>
                 </div>
                 <div style="font-size:0.5rem;color:rgba(255,255,255,0.25);letter-spacing:1px;
-                    text-transform:uppercase;margin-top:0.4rem">op basis van matchstatussen</div>
+                    text-transform:uppercase;margin-top:0.3rem">op basis van pijplijnfases</div>
             </div>""", unsafe_allow_html=True)
 
     # ── VACATURES — rendered in components.html() so JS handles cycling (no re-render) ──
