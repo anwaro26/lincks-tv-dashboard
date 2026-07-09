@@ -577,12 +577,17 @@ def load_pipeline():
             print(f"[PROEFTIJD] {e}")
             s["proeftijd"] = s["geplaatst"]
 
-        # Enforce a monotonic funnel — a candidate cannot reach a later stage
-        # without passing every earlier one. Instroom→Aanbod come from the match
-        # funnel while Geplaatst comes from the placements file, and Carerix often
-        # skips the explicit 'aanbod' (5.0) status, so aanbod undercounted below
-        # geplaatst. Rebuild each stage bottom-up as at least the stage below it.
-        s["aanbod"]      = max(s["aanbod"], s["geplaatst"])
+        # Aanbod = everyone who reached the offer stage. You cannot be placed
+        # without an offer, so start from geplaatst and add the candidates who got
+        # an offer but were NOT placed (declined it: '6.6 weigert aanbod' / 5.0).
+        # In the match funnel those are stage_rank == 4 (offer, not placed) =
+        # (rank>=4) − (rank>=5, i.e. geplaatst_matches). Defendable and always
+        # >= geplaatst, with a real offer→placement drop-off.
+        offers_not_placed = max(0, s["aanbod"] - s["geplaatst_matches"])
+        s["aanbod"]      = s["geplaatst"] + offers_not_placed
+
+        # Enforce a monotonic funnel for the remaining upper stages — a candidate
+        # cannot reach a later stage without passing every earlier one.
         s["gesprek"]     = max(s["gesprek"], s["aanbod"])
         s["voorgesteld"] = max(s["voorgesteld"], s["gesprek"])
         s["instroom"]    = max(s["instroom"], s["voorgesteld"])
