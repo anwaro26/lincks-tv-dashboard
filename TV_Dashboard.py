@@ -1062,11 +1062,17 @@ def render_screen():
             clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
-                connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
+                connector=dict(line=dict(color="rgba(255,255,255,0.08)",width=1)),
                 textfont=dict(size=14,color="white",family="Inter")))
+            # Subtle downward arrows in each connector gap between stages
+            funnel_arrows=[dict(text="▼", xref="x domain", x=0.5,
+                yref="y domain", y=1-(k+1)/len(lbls), showarrow=False,
+                font=dict(size=11,color="rgba(255,255,255,0.28)"))
+                for k in range(len(lbls)-1)]
             fig_f.update_layout(plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
                 font_color="rgba(255,255,255,0.5)",
                 margin=dict(l=140,r=30,t=5,b=5),height=260,
+                annotations=funnel_arrows,
                 yaxis=dict(tickfont=dict(size=12,family="Inter")))
             st.plotly_chart(fig_f,use_container_width=True)
 
