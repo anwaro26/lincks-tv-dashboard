@@ -498,17 +498,28 @@ STAGE_RANK = {"1. Instroom":1,"2. Voorgesteld":2,"3. Gesprek bij klant":3,"4. Aa
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_pipeline():
     """Load pipeline from matches parquet using proven stage classification."""
-    s={"instroom":0,"voorgesteld":0,"gesprek":0,"aanbod":0,"geplaatst":0,
+    s={"instroom":0,"voorgesteld":0,"gesprek":0,"aanbod":0,"geplaatst":0,"proeftijd":0,
        "geplaatst_matches":0,"monthly":[],"avg_ttf":None,"avg_tth":None}
     try:
         matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
         matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
         matches["month"] = matches["creation_date"].dt.strftime("%Y-%m")
 
-        # Stage funnel = active pipeline regardless of when the match was created.
-        # Use rolling 90-day window so old closed matches don't inflate counts.
+        # INSTROOM by candidate creation date (was: match creation date).
+        # Cohort funnel: candidates who ENTERED in the last 90 days, then track how
+        # far each one progressed. The true candidate creation date lives in
+        # matches["candidate_created"] once the sync includes it; until the parquet
+        # is re-synced we fall back to each candidate's FIRST-ever match date as a
+        # proxy for when they entered the pipeline.
         cutoff = nl_now() - timedelta(days=90)
-        cur_m = matches[matches["creation_date"] >= cutoff].copy()
+        if "candidate_created" in matches.columns:
+            matches["candidate_created"] = pd.to_datetime(matches["candidate_created"], errors="coerce")
+            cand_start = matches.groupby("candidate_id")["candidate_created"].min()
+            cand_start = cand_start.fillna(matches.groupby("candidate_id")["creation_date"].min())
+        else:
+            cand_start = matches.groupby("candidate_id")["creation_date"].min()
+        new_cands = cand_start[cand_start >= cutoff].index
+        cur_m = matches[matches["candidate_id"].isin(new_cands)].copy()
 
         # Fall back to previous month if current window is empty (parquet not yet synced)
         if cur_m.empty:
@@ -548,6 +559,19 @@ def load_pipeline():
             cur_pl = pl[pl["month"] == CURRENT_MONTH].copy()
 
         s["geplaatst"] = len(cur_pl)   # placements parquet, gefilterd op kwartaal
+
+        # Proeftijd gehaald — a placement passed probation if NO credit (negative)
+        # invoice was later raised against its job. When a deal falls through the
+        # original placement fee gets reversed with a negative invoice, so a job
+        # that never received one is treated as a passed probation.
+        try:
+            inv_pt = pd.read_parquet(os.path.join(DATA_DIR,"invoices.parquet"))
+            credited_jobs = set(inv_pt.loc[inv_pt["total"] < 0, "job_id"].astype(str))
+            passed = cur_pl[~cur_pl["placement_id"].astype(str).isin(credited_jobs)]
+            s["proeftijd"] = len(passed)
+        except Exception as e:
+            print(f"[PROEFTIJD] {e}")
+            s["proeftijd"] = s["geplaatst"]
 
         # Placements per month — last 6 months, each with the same month one year
         # earlier for a year-over-year comparison. pl is already RHaS-filtered.
@@ -1000,8 +1024,9 @@ def render_screen():
             ("Gesprek bij klant",            p["gesprek"],     "#e92076"),
             ("Heeft Aanbod",                 p["aanbod"],      "#a78bfa"),
             ("Geplaatst ✓",                  p["geplaatst"],   "#00e5a0"),
+            ("Proeftijd gehaald ✓",          p["proeftijd"],   "#00c48c"),
         ]
-        cols=st.columns(5)
+        cols=st.columns(6)
         for col,(lbl,val,clr) in zip(cols,kpis):
             with col:
                 st.markdown(f"""<div class="fkpi">
@@ -1013,9 +1038,9 @@ def render_screen():
 
         cf,ct=st.columns([1.5,1])
         with cf:
-            lbls=["Instroom","Voorgesteld","Gesprek bij klant","Aanbod","Geplaatst"]
-            vals=[p["instroom"],p["voorgesteld"],p["gesprek"],p["aanbod"],p["geplaatst"]]
-            clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0"]
+            lbls=["Instroom","Voorgesteld","Gesprek bij klant","Aanbod","Geplaatst","Proeftijd gehaald"]
+            vals=[p["instroom"],p["voorgesteld"],p["gesprek"],p["aanbod"],p["geplaatst"],p["proeftijd"]]
+            clrs=["#f5a623","#00d4c8","#e92076","#a78bfa","#00e5a0","#00c48c"]
             fig_f=go.Figure(go.Funnel(y=lbls,x=vals,textinfo="value+percent initial",
                 marker=dict(color=clrs,line=dict(width=0)),
                 connector=dict(line=dict(color="rgba(255,255,255,0.05)",width=2)),
