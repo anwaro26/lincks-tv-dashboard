@@ -499,6 +499,38 @@ def classify_match_stage(row):
 
 STAGE_RANK = {"1. Instroom":1,"2. Voorgesteld":2,"3. Gesprek bij klant":3,"4. Aanbod":4,"5. Geplaatst":5}
 
+def fetch_new_matches(since_date):
+    """Fetch matches created after since_date from Carerix (same pattern as the
+    invoice/placement incremental sync). crMatchPage accepts the server-side
+    creationDate qualifier; we still dedupe on match_id after concat."""
+    print(f"[FETCH matches] fetching matches since {since_date}...")
+    all_items = []
+    for page_num in range(0, 20):
+        query = f"""
+        {{
+            crMatchPage(qualifier: "creationDate > (NSCalendarDate) '{since_date} 00:00:00'",
+                        pageable: {{page: {page_num}, size: 200}}) {{
+                totalElements
+                items {{
+                    _id creationDate
+                    statusInfo {{ name displayName isSuccessfullyFilled isFinal }}
+                    owner {{ firstName lastName }} agency {{ name }} toEmployee {{ _id }}
+                    jobs(pageable: {{page: 0, size: 1}}) {{ totalElements }}
+                }}
+            }}
+        }}
+        """
+        data = run_query(query)
+        if not data or not data.get("data"): break
+        page = data.get("data", {}).get("crMatchPage") or {}
+        items = page.get("items", [])
+        if not items: break
+        all_items.extend(items)
+        if len(all_items) >= page.get("totalElements", 0): break
+        _time.sleep(0.5)
+    print(f"[FETCH matches] found {len(all_items)} new matches")
+    return all_items
+
 @st.cache_data(ttl=7200, show_spinner=False)
 def load_pipeline():
     """Load pipeline from matches parquet using proven stage classification."""
@@ -507,6 +539,46 @@ def load_pipeline():
     try:
         matches = pd.read_parquet(os.path.join(DATA_DIR,"matches.parquet"))
         matches["creation_date"] = pd.to_datetime(matches.get("creation_date",""), errors="coerce")
+
+        # ── Incremental match sync ────────────────────────────────────────────
+        # Matches were historically NOT live-synced (only invoices/placements were),
+        # so this parquet stays frozen at its last creation_date while the rolling
+        # funnel window slides forward into data that isn't there. Fetch everything
+        # newer than the snapshot's OWN max date — not get_last_sync(), which tracks
+        # the invoice sync and would skip matches entirely — then concat + dedupe on
+        # match_id, exactly like the invoice/placement sync in load_invoice_df().
+        try:
+            snap_max   = matches["creation_date"].max()
+            since_date = snap_max.strftime("%Y-%m-%d") if pd.notna(snap_max) else "2024-01-01"
+            if since_date < nl_now().strftime("%Y-%m-%d") and CLIENT_SECRET:
+                new_matches = fetch_new_matches(since_date)
+                if new_matches:
+                    mrows = []
+                    for m in new_matches:
+                        owner = m.get("owner") or {}; agency = m.get("agency") or {}
+                        si = m.get("statusInfo") or {}; employee = m.get("toEmployee") or {}
+                        jobs = m.get("jobs") or {}
+                        mrows.append({
+                            "match_id":               str(m["_id"]),
+                            "creation_date":          m.get("creationDate"),
+                            "candidate_id":           str(employee.get("_id", m["_id"])),
+                            "consultant":             f"{owner.get('firstName','')} {owner.get('lastName','')}".strip(),
+                            "agency":                 agency.get("name", "Unknown"),
+                            "status_name":            si.get("name", ""),
+                            "status_display":         si.get("displayName", ""),
+                            "is_successfully_filled": bool(si.get("isSuccessfullyFilled")),
+                            "is_final":               bool(si.get("isFinal")),
+                            "has_job":                jobs.get("totalElements", 0) > 0,
+                        })
+                    new_df = pd.DataFrame(mrows)
+                    # Force tz-naive to match the parquet (which stores naive datetimes);
+                    # a tz-aware API response would otherwise make the concat/.max() throw.
+                    new_df["creation_date"] = pd.to_datetime(new_df["creation_date"], errors="coerce", utc=True).dt.tz_localize(None)
+                    matches = pd.concat([matches, new_df], ignore_index=True).drop_duplicates(subset=["match_id"], keep="last")
+                    print(f"[FETCH matches] +{len(mrows)} since {since_date} → total {len(matches)} (max {matches['creation_date'].max()})")
+        except Exception as e:
+            print(f"[FETCH matches] {e}")
+
         matches["month"] = matches["creation_date"].dt.strftime("%Y-%m")
 
         # INSTROOM by candidate creation date (was: match creation date).
