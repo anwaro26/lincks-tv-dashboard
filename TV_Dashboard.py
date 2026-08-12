@@ -114,6 +114,67 @@ section[data-testid="stSidebar"]{display:none!important;}
 <meta http-equiv="refresh" content="7200">
 """, unsafe_allow_html=True)
 
+# ── Toegangsbeveiliging ───────────────────────────────────────────────────────
+# Eén gedeeld teamwachtwoord uit een environment variable (DASHBOARD_PASSWORD, gezet in
+# Render). Deze check staat HELEMAAL bovenaan, vóór het laden van data en het renderen van
+# welke visual dan ook: bij falen roept hij st.stop() aan, dus er lekt niets. Per browsertab
+# hoef je maar één keer in te loggen (st.session_state is per sessie/tab); tab sluiten = opnieuw.
+import hmac
+
+def _require_password():
+    try:
+        expected = st.secrets.get("DASHBOARD_PASSWORD", os.environ.get("DASHBOARD_PASSWORD", ""))
+    except Exception:
+        expected = os.environ.get("DASHBOARD_PASSWORD", "")
+    expected = str(expected or "")
+
+    _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lincks_logo_fc-wit_def.png")
+    if os.path.exists(_logo_path):
+        with open(_logo_path, "rb") as _f:
+            _b64 = base64.b64encode(_f.read()).decode()
+        _logo = f'<img src="data:image/png;base64,{_b64}" style="height:54px;margin-bottom:1.6rem;" />'
+    else:
+        _logo = '<span style="font-family:Syne,sans-serif;font-size:1.7rem;font-weight:800;color:#fff;">LINCKS</span>'
+
+    # Env var ontbreekt: blokkeren met een duidelijke melding, nooit stil openzetten.
+    if not expected:
+        st.markdown(
+            f'<div style="text-align:center;margin-top:15vh;">{_logo}'
+            '<div style="font-family:Syne,sans-serif;font-size:1.5rem;font-weight:800;color:#fff;">Dashboard vergrendeld</div>'
+            '<div style="max-width:440px;margin:0.7rem auto 0;color:rgba(255,255,255,0.6);font-size:0.95rem;line-height:1.5;">'
+            'Er is geen teamwachtwoord ingesteld. Stel de omgevingsvariabele DASHBOARD_PASSWORD in bij de '
+            'serverinstellingen, daarna is het dashboard bereikbaar.</div></div>',
+            unsafe_allow_html=True)
+        st.stop()
+
+    # Deze tab is al ingelogd.
+    if st.session_state.get("dashboard_auth"):
+        return
+
+    st.markdown(
+        f'<div style="text-align:center;margin-top:12vh;">{_logo}'
+        '<div style="font-family:Syne,sans-serif;font-size:1.7rem;font-weight:800;color:#fff;letter-spacing:0.02em;">Lincks Performance</div>'
+        '<div style="margin-top:0.5rem;color:rgba(255,255,255,0.6);font-size:0.95rem;">Voer het teamwachtwoord in om verder te gaan</div></div>',
+        unsafe_allow_html=True)
+
+    _l, _m, _r = st.columns([1, 1.1, 1])
+    with _m:
+        with st.form("login_form"):
+            _pw = st.text_input("Wachtwoord", type="password",
+                                label_visibility="collapsed", placeholder="Wachtwoord")
+            _submit = st.form_submit_button("Inloggen", use_container_width=True)
+        if _submit:
+            # Constant time vergelijking (nooit ==), waarde uitsluitend uit de omgeving.
+            # Bytes i.p.v. str zodat ook niet-ASCII tekens in het wachtwoord veilig werken.
+            if hmac.compare_digest(_pw.encode("utf-8"), expected.encode("utf-8")):
+                st.session_state["dashboard_auth"] = True
+                st.rerun()
+            else:
+                st.error("Onjuist wachtwoord. Probeer het opnieuw.")
+    st.stop()
+
+_require_password()
+
 # ── Config ────────────────────────────────────────────────────────────────────
 CLIENT_ID     = "4db4f54a9c90230221da81f085ef3bd5.apps.carerix.io"
 # Try st.secrets first (Streamlit Cloud), fall back to env var (local dev)
