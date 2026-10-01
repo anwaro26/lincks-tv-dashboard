@@ -196,6 +196,39 @@ TARGETS = {
 }
 DEFAULT_TARGET = 31250
 COMPANY_TARGET = 250000
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def load_active_recruiters():
+    """Current team = recruiters in users.parquet with is_active == True (excl. Mireille Prooi).
+    A former recruiter (is_active=False, e.g. Sharon Kruijssen) is NOT in this set, so they drop
+    out of the current-month recruiter bar. Monthly target = omzetdoel_jaar/12 from users.parquet
+    where set, otherwise the TARGETS fallback (last-name match, then DEFAULT_TARGET).
+    Returns (active_names:set, monthly_target:dict name->€/maand)."""
+    def _fallback_target(nm):
+        if nm in TARGETS: return TARGETS[nm]
+        last = nm.split()[-1] if nm else ""
+        for k, v in TARGETS.items():
+            if k.split()[-1] == last: return v
+        return DEFAULT_TARGET
+    try:
+        u = pd.read_parquet(os.path.join(DATA_DIR, "users.parquet"))
+    except Exception:
+        # No users.parquet -> old behaviour: TARGETS names with a target > 0.
+        names = {n for n, t in TARGETS.items() if t > 0 and n != "Mireille Prooi"}
+        return names, {n: TARGETS[n] for n in names}
+    if "is_active" in u.columns:
+        u = u[u["is_active"] == True]
+    names, omzet = set(), {}
+    for _, r in u.iterrows():
+        nm = str(r.get("full_name") or "").strip()
+        if not nm or nm == "Mireille Prooi":
+            continue
+        names.add(nm)
+        oz = pd.to_numeric(pd.Series([r.get("omzetdoel_jaar")]), errors="coerce").iloc[0]
+        if pd.notna(oz) and oz > 0:
+            omzet[nm] = max(omzet.get(nm, 0.0), float(oz) / 12.0)   # a name may have 2 ids; take its real target
+    target = {nm: (omzet[nm] if omzet.get(nm) else _fallback_target(nm)) for nm in names}
+    return names, target
 MARGINS = {
     "Bakker Barendrecht":(0.294693758+0.303208773)/2,
     "Bakker Barendrecht ":(0.294693758+0.303208773)/2,
@@ -1072,15 +1105,10 @@ def render_screen():
                     margin=dict(l=0,r=10,t=30,b=0),height=240)
                 st.plotly_chart(fig_rev,use_container_width=True)
             else:
-                # Fallback: recruiter bar chart
-                def get_t(n):
-                    if n in TARGETS: return TARGETS[n]
-                    last=n.split()[-1] if n else ""
-                    for k,v in TARGETS.items():
-                        if k.split()[-1]==last: return v
-                    return DEFAULT_TARGET
-                rc=excl.groupby("consultant")["revenue"].sum().reset_index()
-                rc["t"]=rc["consultant"].apply(get_t)
+                # Fallback: recruiter bar chart — current team only (active users, excl Mireille).
+                active_names, monthly_target = load_active_recruiters()
+                rc=excl[excl["consultant"].isin(active_names)].groupby("consultant")["revenue"].sum().reset_index()
+                rc["t"]=rc["consultant"].map(lambda n: monthly_target.get(n, DEFAULT_TARGET))
                 rc["t"]=pd.to_numeric(rc["t"],errors="coerce").fillna(DEFAULT_TARGET).astype(float)
                 rc["p"]=(rc["revenue"]/rc["t"]*100).round(1)
                 rc["r"]=(rc["t"]-rc["revenue"]).clip(lower=0)
@@ -1105,21 +1133,19 @@ def render_screen():
 
         # Recruiter bar always shown below
         st.markdown(f"<div style='{_title_style}'>Omzet per Recruiter</div>", unsafe_allow_html=True)
-        rc_df = df_cur[df_cur["consultant"] != "Mireille Prooi"].groupby("consultant")["revenue"].sum().reset_index()
-        def get_target_bar(name):
-            if name in TARGETS: return TARGETS[name]
-            last = name.split()[-1] if name else ""
-            for k, v in TARGETS.items():
-                if k.split()[-1] == last: return v
-            return DEFAULT_TARGET
-        # Add all recruiters from TARGETS who have a target > 0 but no invoices yet this month
+        # Current team only: active recruiters from users.parquet (is_active==True), excl Mireille.
+        # Former recruiters (is_active=False, e.g. Sharon) no longer appear here — their historical
+        # revenue stays in the revenue dashboard. Monthly target = omzetdoel_jaar/12, else TARGETS.
+        active_names, monthly_target = load_active_recruiters()
+        rc_df = (df_cur[df_cur["consultant"].isin(active_names)]
+                 .groupby("consultant")["revenue"].sum().reset_index())
+        # Add a zero-revenue row for any active recruiter with no invoices yet this month.
         existing = set(rc_df["consultant"].tolist())
         zero_rows = [{"consultant": name, "revenue": 0.0}
-                     for name, target in TARGETS.items()
-                     if target > 0 and name not in existing]
+                     for name in active_names if name not in existing]
         if zero_rows:
             rc_df = pd.concat([rc_df, pd.DataFrame(zero_rows)], ignore_index=True)
-        rc_df["target"]    = rc_df["consultant"].apply(get_target_bar)
+        rc_df["target"]    = rc_df["consultant"].map(lambda n: monthly_target.get(n, DEFAULT_TARGET))
         rc_df["pct"]       = (rc_df["revenue"] / rc_df["target"] * 100).round(1)
         rc_df["resterend"] = (rc_df["target"] - rc_df["revenue"]).clip(lower=0)
         rc_df              = rc_df.sort_values("revenue", ascending=True)
